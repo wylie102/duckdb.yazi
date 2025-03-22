@@ -13,6 +13,14 @@ prepend_previewers = [
   { name = "*.xlsx", run = "duckdb" },
 ```
 
+## Dependancies
+
+Yazi
+[Installation installations](https://yazi-rs.github.io/docs/installation)
+
+duckdb
+[Installation instructions](https://duckdb.org/docs/installation/?version=stable&environment=cli&platform=macos&download_method=direct)
+
 ## Recommended plugins
 
 I recommend using this with a larger size for your preview window or using the maximise preview pane plugin:
@@ -31,4 +39,20 @@ Can be used on:
 .tsv
 .xlsx
 
+Can also be used to preview files in standard format, rather than summarized.
+
+To change the mode, from the command line run:
+
+    export DUCKDB_PREVIEW_MODE=summarized
+    export DUCKDB_PREVIEW_MODE=standard
+
+Summarized will display the default output summarizing each column as a row.
+Standard returns a standard view of your file as if it were a table.
+
+Both views are vertically scrollable with J and K.
+(currently scrolling in parquet in standard will perform the best, ans summarized the slowest as the query is re-run each time to move the output, but I am working on implementing caching to speed this up.)
+
 ## Preview
+
+<img width="1710" alt="Screenshot 2025-03-22 at 17 59 21" src="https://github.com/user-attachments/assets/ac006667-4281-4e0a-87a4-bfaeefc6f20b" />
+<img width="1710" alt="Screenshot 2025-03-22 at 18 00 06" src="https://github.com/user-attachments/assets/db09fff9-2db1-4273-9ddf-34d0bf087967" />
