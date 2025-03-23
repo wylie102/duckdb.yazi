@@ -78,101 +78,122 @@ end
 function M:preload(job)
 	local cache = ya.file_cache(job)
 	if not cache then
-		ya.dbg("Preload - No cache path returned from ya.file_cache(job)")
+		ya.dbg("Preload - No cache url found.")
 		return false
 	end
 
-	ya.dbg("Preload - Cache path: " .. tostring(cache))
 	-- If the cache file already exists, no need to preload.
 	if fs.cha(cache) then
 		ya.dbg("Preload - Cache already exists (fs.cha returned true)")
 		return true
 	end
 
+	-- Generate basic sql statements.
 	local standard_sql = generate_sql(job, "standard")
 	local summarized_sql = generate_sql(job, "summarized")
-	ya.dbg("Preload - standard SQL: " .. standard_sql)
-	ya.dbg("Preload - summarized SQL: " .. summarized_sql)
+	ya.dbg("Preload -  basic query statements returned.")
+
+	-- Generate create table statements.
 	local create_table_standard = string.format("CREATE TABLE Standard AS (%s);", standard_sql)
 	local create_table_summarized = string.format("CREATE TABLE Summarized AS (%s);", summarized_sql)
-	ya.dbg("Preload - create_table_standard statement: " .. create_table_standard)
-	ya.dbg("Preload - create_table_summarized statement: " .. create_table_summarized)
+	ya.dbg("Preload - create table statements returned.")
 
+	-- Sleep for 0.01s to avoid blocking peek process on first file highlighted.
+	ya.sleep(0.01)
+
+	-- Create database and run queries to create tables.
 	local child = Command("duckdb")
-		:args({ tostring(cache), "-c", create_table_standard, "-c", create_table_summarized })
+		:args({ tostring(cache), "-c", create_table_summarized, "-c", create_table_standard })
 		:stdout(Command.PIPED)
 		:stderr(Command.PIPED)
 		:spawn()
 	if not child then
-		ya.dbg("Preload - Failed to spawn DuckDB command")
+		ya.dbg("Preload - Failed to initialise db and store created tables.")
 		return false
 	end
 
+	-- Wait for completion and return any errors.
 	local output, err = child:wait_with_output()
 	if err or not output or (output.stderr and output.stderr ~= "") then
 		ya.err("DuckDB preloader error: " .. (err or output.stderr))
 		return false
 	end
 
-	ya.dbg("Preload - DuckDB CREATE TABLE command completed successfully")
+	-- tables created.
+	ya.dbg("Preload - Db and tables created.")
 	return true
 end
 
+-- Peek Function
 function M:peek(job)
+	-- store cache and mode variables.
 	local cache = ya.file_cache(job)
 	local mode = os.getenv("DUCKDB_PREVIEW_MODE") or "summarized"
 
+	-- if no cache url use default previewer.
 	if not cache then
-		ya.dbg("Peek - No cache found, falling back to default preview")
+		ya.dbg("Peek - No cache url found. Using default preview.")
 		return require("code"):peek(job)
 	end
 
+	-- echo cache path to log.
 	ya.dbg("Peek - Cache path: " .. tostring(cache))
+
 	-- If the cache does not exist yet, try preloading.
 	if not fs.cha(cache) then
 		ya.dbg("Peek - Cache not found on disk, attempting to preload")
 		if not self:preload(job) then
-			ya.dbg("Peek - Preload failed, falling back to default preview")
+			ya.dbg("Peek - Preload failed. Using default preview")
 			return require("code"):peek(job)
 		end
 	end
 
+	-- Store and lof limit and offset variables.
 	local limit = job.area.h - 2
 	local offset = job.skip or 0
 	ya.dbg("Peek - Limit: " .. tostring(limit) .. ", Offset: " .. tostring(offset))
-	-- Query the cached parquet file.
+
+	-- store table name variable.
 	local queried_table = ""
 	if mode == "standard" then
 		queried_table = "Standard"
 	else
 		queried_table = "Summarized"
 
+		-- Generate query.
 		local query = string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
 		ya.dbg("Peek - SQL Query: " .. query)
 
+		-- Run query.
 		local child =
 			Command("duckdb"):args({ tostring(cache), "-c", query }):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+
+		-- If query fails use standerd preview.
 		if not child then
 			ya.dbg("Peek - Failed to spawn DuckDB command, falling back")
 			return require("code"):peek(job)
 		end
 
+		-- Wait on result, if error use standard previewer.
 		local output, err = child:wait_with_output()
 		if err then
 			ya.dbg("DuckDB command error: " .. tostring(err))
 			return require("code"):peek(job)
 		end
 
+		-- If query returns no output then use standard previewer.
 		if output.stdout == "" then
 			ya.dbg("DuckDB returned no output.")
 			return require("code"):peek(job)
 		end
 
-		ya.dbg("Peek - DuckDB command output received")
+		-- If query returns data, log success and preview.
+		ya.dbg("Peek - Query succesfully returned data.")
 		ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 	end
 end
 
+-- Seek function.
 function M:seek(job)
 	local h = cx.active.current.hovered
 	if not h or h.url ~= job.file.url then
