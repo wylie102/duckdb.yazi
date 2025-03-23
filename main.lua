@@ -159,38 +159,38 @@ function M:peek(job)
 		queried_table = "Standard"
 	else
 		queried_table = "Summarized"
-
-		-- Generate query.
-		local query = string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
-		ya.dbg("Peek - SQL Query: " .. query)
-
-		-- Run query.
-		local child =
-			Command("duckdb"):args({ tostring(cache), "-c", query }):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
-
-		-- If query fails use standerd preview.
-		if not child then
-			ya.dbg("Peek - Failed to spawn DuckDB command, falling back")
-			return require("code"):peek(job)
-		end
-
-		-- Wait on result, if error use standard previewer.
-		local output, err = child:wait_with_output()
-		if err then
-			ya.dbg("DuckDB command error: " .. tostring(err))
-			return require("code"):peek(job)
-		end
-
-		-- If query returns no output then use standard previewer.
-		if output.stdout == "" then
-			ya.dbg("DuckDB returned no output.")
-			return require("code"):peek(job)
-		end
-
-		-- If query returns data, log success and preview.
-		ya.dbg("Peek - Query succesfully returned data.")
-		ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 	end
+
+	-- Generate query.
+	local query = string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
+	ya.dbg("Peek - SQL Query: " .. query)
+
+	-- Run query.
+	local child =
+		Command("duckdb"):args({ tostring(cache), "-c", query }):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+
+	-- If query fails use standerd preview.
+	if not child then
+		ya.dbg("Peek - Failed to spawn DuckDB command, falling back")
+		return require("code"):peek(job)
+	end
+
+	-- Wait on result, if error use standard previewer.
+	local output, err = child:wait_with_output()
+	if err then
+		ya.dbg("DuckDB command error: " .. tostring(err))
+		return require("code"):peek(job)
+	end
+
+	-- If query returns no output then use standard previewer.
+	if output.stdout == "" then
+		ya.dbg("DuckDB returned no output.")
+		return require("code"):peek(job)
+	end
+
+	-- If query returns data, log success and preview.
+	ya.dbg("Peek - Query succesfully returned data.")
+	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 end
 
 -- Seek function.
