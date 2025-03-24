@@ -9,47 +9,40 @@ local function get_db_path()
 	return temp .. "/yazi.duckdb"
 end
 
--- Runs DuckDB with optional CSV output
-local function run_duckdb(sql, opts)
-	local args = { get_db_path() }
-	if opts and opts.csv then
-		args[#args + 1] = "-csv"
-		args[#args + 1] = "-header"
-	end
+local function initialize_cache_db()
+	local db_path = get_db_path()
+  if not fs.cha(db_path) then
+    local args = { "-c"}
+    args[#args+1] = string.format("ATTACH IF NOT EXISTS '%s' (STORAGE_VERSION 'v1.2.0');", db_path)
+    local cmd = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+      if not cmd then
+        return nil
+      end
+    return db_path
+  end
+
+-- Runs DuckDB query.
+local function run_duckdb(db_path, sql)
+	local args = { db_path }
 	args[#args + 1] = "-c"
 	args[#args + 1] = sql
-end
-
--- Runs DuckDB with optional CSV output
-local function run_duckdb(sql, opts)
-	local args = { get_db_path() }
-	if opts and opts.csv then
-		args[#args + 1] = "-csv"
-		args[#args + 1] = "-header"
-	end
-	args[#args + 1] = "-c"
-	args[#args + 1] = sql
-
-	log_debug("DuckDB =>", table.concat(args, " "))
 	local cmd = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 	if not cmd then
-		log_debug("Failed to spawn DuckDB.")
 		return nil
 	end
 	return cmd
 end
 
--- Makes a safe table name from (file_url, mode)
-local function get_table_name(file_url, mode)
-	if not file_url then
-		return "no_file_url_" .. (mode or "unknown")
-	end
-	local s = tostring(file_url):gsub("[^%w_]+", "_")
-	return s .. "_" .. mode
+
+-- Makes a safe schema name from (file_url)
+local function get_schema_name(file_url)
+    local url_string = tostring(file_url)
+    local hashed_url = ya.hash(url_string)
+    return hashed_url
 end
 
 -- This function generates the SQL query based on the preview mode.
-local function generate_sql(job, mode)
+local function generate_initial_query(job, mode)
 	local initial_query = ""
 	if mode == "standard" then
 		initial_query = string.format("SELECT * FROM '%s' LIMIT 500", tostring(job.file.url))
@@ -124,26 +117,30 @@ end
 
 -- Preload function: outputs the query result to a parquet file (cache) using DuckDB's COPY.
 function M:preload(job)
-	local cache = ya.file_cache(job)
-	if not cache then
-		ya.dbg("Preload - No cache url found.")
+	local file_url = job.file and job.file.url
+	if not file_url then
+		ya.dbg("Preload - No file url found.")
 		return false
 	end
 
-	-- If the cache file already exists, no need to preload.
-	if fs.cha(cache) then
-		ya.dbg("Preload - Cache already exists (fs.cha returned true)")
-		return true
-	end
+  local db_path = initialize_cache_db()
+
+  --Check if schema exists, if not then create schema 
+
+
+  -- create or replace schema in db.
+  local schema_name = get_schema_name(file_url)
+  local schema_create = string.format("CREATE OR REPLACE SCHEMA (%s);", schema_name)
+  run_duckdb(db_path, sql)
 
 	-- Generate basic sql statements.
-	local standard_sql = generate_sql(job, "standard")
-	local summarized_sql = generate_sql(job, "summarized")
+	local standard_sql = generate_initial_query(job, "standard")
+	local summarized_sql = generate_initial_query(job, "summarized")
 	ya.dbg("Preload -  basic query statements returned.")
 
 	-- Generate create table statements.
-	local create_table_standard = string.format("CREATE TABLE Standard AS (%s);", standard_sql)
-	local create_table_summarized = string.format("CREATE TABLE Summarized AS (%s);", summarized_sql)
+	local create_table_standard = string.format("CREATE TABLE (%s).Standard AS (%s);", schema_name, standard_sql)
+	local create_table_summarized = string.format("CREATE TABLE (%s).Summarized AS (%s);", schema_name, summarized_sql)
 	ya.dbg("Preload - create table statements returned.")
 
 	-- Sleep for 0.01s to avoid blocking peek process on first file highlighted.
