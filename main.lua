@@ -1,5 +1,53 @@
 local M = {}
 
+-- Returns a path to the DuckDB file in the system temp dir
+local function get_db_path()
+	local temp = os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
+	if temp:sub(-1) == "/" or temp:sub(-1) == "\\" then
+		temp = temp:sub(1, -2)
+	end
+	return temp .. "/yazi.duckdb"
+end
+
+-- Runs DuckDB with optional CSV output
+local function run_duckdb(sql, opts)
+	local args = { get_db_path() }
+	if opts and opts.csv then
+		args[#args + 1] = "-csv"
+		args[#args + 1] = "-header"
+	end
+	args[#args + 1] = "-c"
+	args[#args + 1] = sql
+end
+
+-- Runs DuckDB with optional CSV output
+local function run_duckdb(sql, opts)
+	local args = { get_db_path() }
+	if opts and opts.csv then
+		args[#args + 1] = "-csv"
+		args[#args + 1] = "-header"
+	end
+	args[#args + 1] = "-c"
+	args[#args + 1] = sql
+
+	log_debug("DuckDB =>", table.concat(args, " "))
+	local cmd = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+	if not cmd then
+		log_debug("Failed to spawn DuckDB.")
+		return nil
+	end
+	return cmd
+end
+
+-- Makes a safe table name from (file_url, mode)
+local function get_table_name(file_url, mode)
+	if not file_url then
+		return "no_file_url_" .. (mode or "unknown")
+	end
+	local s = tostring(file_url):gsub("[^%w_]+", "_")
+	return s .. "_" .. mode
+end
+
 -- This function generates the SQL query based on the preview mode.
 local function generate_sql(job, mode)
 	local initial_query = ""
