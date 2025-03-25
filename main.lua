@@ -115,7 +115,12 @@ end
 
 local function generate_query(target, job, limit, mode, offset)
 	if target == job.file.url then
-		return generate_sql(job, mode) .. ";"
+		if mode == "standard" then
+			return string.format("SELECT * FROM '%s' LIMIT %d OFFSET %d;", tostring(target), limit, offset)
+		else
+			local query = generate_sql(job, mode)
+			return string.format("WITH query as (%s) SELECT * FROM query LIMIT %d OFFSET %d;", query, limit, offset)
+		end
 	else
 		local queried_table = get_table_name(mode)
 		return string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
@@ -182,7 +187,7 @@ function M:peek(job)
 	job.skip = 0
 	local cache = ya.file_cache(job)
 	job.skip = offset
-	local mode = os.getenv("DUCKDB_PREVIEW_MODE") or "summarized"
+	local mode = os.getenv("DUCKDB_PREVIEW_MODE") or "standard"
 	local file_url = job.file.url
 	ya.dbg("Peek - file:" .. tostring(file_url))
 	ya.dbg("Peek - mtime:" .. tostring(job.file.cha.mtime))
