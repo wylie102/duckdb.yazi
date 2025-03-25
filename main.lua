@@ -127,7 +127,13 @@ end
 -- Peek Function
 function M:peek(job)
 	-- store cache and mode variables.
+	ya.dbg("Peek - file:" .. tostring(job.file.url))
+	ya.dbg("Peek - mtime:" .. tostring(job.file.cha.mtime))
+	local limit = job.area.h - 7
+	local offset = job.skip or 0
+	job.skip = 0
 	local cache = ya.file_cache(job)
+	job.skip = offset
 	local mode = os.getenv("DUCKDB_PREVIEW_MODE") or "summarized"
 
 	-- if no cache url use default previewer.
@@ -149,8 +155,6 @@ function M:peek(job)
 	end
 
 	-- Store and lof limit and offset variables.
-	local limit = job.area.h - 2
-	local offset = job.skip or 0
 	ya.dbg("Peek - Limit: " .. tostring(limit) .. ", Offset: " .. tostring(offset))
 
 	-- store table name variable.
@@ -195,6 +199,8 @@ end
 
 -- Seek function.
 function M:seek(job)
+	ya.dbg("Seek - file:" .. tostring(job.file.url))
+	ya.dbg("Seek - mtime:" .. tostring(job.file.cha.mtime))
 	local h = cx.active.current.hovered
 	if not h or h.url ~= job.file.url then
 		return
