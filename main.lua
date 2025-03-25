@@ -79,16 +79,26 @@ local function get_table_name(mode)
 end
 
 local function run_query(job, query, target)
-	local child =
-		Command("duckdb"):args({ tostring(target), "-c", query }):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+	local args = {}
 
-	-- If query fails use standerd preview.
+	-- Only include the target if it's a cache.
+	if target ~= job.file.url then
+		table.insert(args, tostring(target))
+	end
+
+	table.insert(args, "-c")
+	table.insert(args, query)
+
+	ya.dbg("Running DuckDB query with args: " .. table.concat(args, " "))
+
+	-- run query
+	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+
 	if not child then
 		ya.dbg("Peek - Failed to spawn DuckDB command, falling back")
 		return require("code"):peek(job)
 	end
 
-	-- Wait on result, if error use standard previewer.
 	local output, err = child:wait_with_output()
 	if err then
 		ya.dbg("DuckDB command error: " .. tostring(err))
@@ -205,6 +215,7 @@ function M:peek(job)
 			target = file_url
 			-- Generate and run query.
 			query = generate_query(target, job, limit, mode, offset)
+			ya.dbg("Peek - Second query:" .. tostring(query))
 			output = run_query(job, query, target)
 		else
 			return require("code"):peek(job)
