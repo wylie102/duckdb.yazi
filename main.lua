@@ -1,5 +1,3 @@
-local M = {}
-
 -- This function generates the SQL query based on the preview mode.
 local function generate_sql(job, mode)
 	local initial_query = ""
@@ -74,6 +72,48 @@ local function generate_sql(job, mode)
 	return initial_query
 end
 
+local function get_table_name(mode)
+	local queried_table = nil
+	if mode == "standard" then
+		queried_table = "Standard"
+	else
+		queried_table = "Summarized"
+	end
+	return queried_table
+end
+
+local function run_query(job, query, target)
+	local child =
+		Command("duckdb"):args({ tostring(target), "-c", query }):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+
+	-- If query fails use standerd preview.
+	if not child then
+		ya.dbg("Peek - Failed to spawn DuckDB command, falling back")
+		return require("code"):peek(job)
+	end
+
+	-- Wait on result, if error use standard previewer.
+	local output, err = child:wait_with_output()
+	if err then
+		ya.dbg("DuckDB command error: " .. tostring(err))
+		return require("code"):peek(job)
+	end
+	return output
+end
+
+local function generate_query(target, job, limit, mode, offset)
+	local query = nil
+	if target == cache then
+		local queried_table = get_table_name(mode)
+		query = string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
+	else
+		query = generate_sql(job, mode) .. ";"
+		return query
+	end
+end
+
+local M = {}
+
 -- Preload function: outputs the query result to a parquet file (cache) using DuckDB's COPY.
 function M:preload(job)
 	local cache = ya.file_cache(job)
@@ -127,73 +167,53 @@ end
 -- Peek Function
 function M:peek(job)
 	-- store cache and mode variables.
-	ya.dbg("Peek - file:" .. tostring(job.file.url))
-	ya.dbg("Peek - mtime:" .. tostring(job.file.cha.mtime))
 	local limit = job.area.h - 7
 	local offset = job.skip or 0
 	job.skip = 0
 	local cache = ya.file_cache(job)
 	job.skip = offset
 	local mode = os.getenv("DUCKDB_PREVIEW_MODE") or "summarized"
+	local file_url = job.file.url
+	ya.dbg("Peek - file:" .. tostring(file_url))
+	ya.dbg("Peek - mtime:" .. tostring(file_url.mtime))
+	ya.dbg("Peek - Cache path: " .. tostring(cache))
+	ya.dbg("Peek - Limit: " .. tostring(limit) .. ", Offset: " .. tostring(offset))
+	local target = cache
 
 	-- if no cache url use default previewer.
 	if not cache then
-		ya.dbg("Peek - No cache url found. Using default preview.")
-		return require("code"):peek(job)
+		ya.err("Peek - No cache url found. Querying file directly.")
+		target = file_url
 	end
 
-	-- echo cache path to log.
-	ya.dbg("Peek - Cache path: " .. tostring(cache))
-
-	-- Store and log limit and offset variables.
-	ya.dbg("Peek - Limit: " .. tostring(limit) .. ", Offset: " .. tostring(offset))
-
-	-- store table name variable.
-	local queried_table = ""
-	if mode == "standard" then
-		queried_table = "Standard"
-	else
-		queried_table = "Summarized"
-	end
-
-	-- Generate query.
-	-- If the cache does not exist yet, try preloading.
-	local query = string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
-	ya.dbg("Peek - SQL Query: " .. query)
+	-- If the cache does not exist yet, query file directly.
 	if not fs.cha(cache) then
-		ya.dbg("Peek - Cache not found on disk, attempting to preload")
-		if not self:preload(job) then
-			ya.dbg("Peek - Preload failed. Reading from file.")
-			query = generate_sql(job, mode) .. ";"
-		end
+		ya.dbg("Peek - Cache not found on disk, Querying file directly.")
+		target = file_url
 	end
 
-	-- Run query.
-	local child =
-		Command("duckdb"):args({ tostring(cache), "-c", query }):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
-
-	-- If query fails use standerd preview.
-	if not child then
-		ya.dbg("Peek - Failed to spawn DuckDB command, falling back")
-		return require("code"):peek(job)
-	end
-
-	-- Wait on result, if error use standard previewer.
-	local output, err = child:wait_with_output()
-	if err then
-		ya.dbg("DuckDB command error: " .. tostring(err))
-		return require("code"):peek(job)
-	end
+	-- Generate and run query.
+	local query = generate_query(target, job, limit, mode, offset)
+	ya.dbg("Peek - First query:" .. tostring(query))
+	local output = run_query(job, query, target)
 
 	-- If query returns no output then use standard previewer.
 	if output.stdout == "" then
-		ya.dbg("DuckDB returned no output.")
-		return require("code"):peek(job)
-	end
+		ya.err("Peek - duckdb returned no output")
+		ya.dbg("Peek - target:" .. tostring(target))
+		if target == cache then
+			target = file_url
+			-- Generate and run query.
+			query = generate_query(target, job, limit, mode, offset)
+			output = run_query(job, query, target)
+		else
+			return require("code"):peek(job)
+		end
 
-	-- If query returns data, log success and preview.
-	ya.dbg("Peek - Query succesfully returned data.")
-	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
+		-- If query returns data, log success and preview.
+		ya.dbg("Peek - Query succesfully returned data.")
+		ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
+	end
 end
 
 -- Seek function.
