@@ -99,7 +99,7 @@ function M:preload(job)
 	ya.dbg("Preload - create table statements returned.")
 
 	-- Sleep for 0.01s to avoid blocking peek process on first file highlighted.
-	ya.sleep(0.01)
+	-- ya.sleep(0.01)
 
 	-- Create database and run queries to create tables.
 	local child = Command("duckdb")
@@ -145,16 +145,7 @@ function M:peek(job)
 	-- echo cache path to log.
 	ya.dbg("Peek - Cache path: " .. tostring(cache))
 
-	-- If the cache does not exist yet, try preloading.
-	if not fs.cha(cache) then
-		ya.dbg("Peek - Cache not found on disk, attempting to preload")
-		if not self:preload(job) then
-			ya.dbg("Peek - Preload failed. Using default preview")
-			return require("code"):peek(job)
-		end
-	end
-
-	-- Store and lof limit and offset variables.
+	-- Store and log limit and offset variables.
 	ya.dbg("Peek - Limit: " .. tostring(limit) .. ", Offset: " .. tostring(offset))
 
 	-- store table name variable.
@@ -166,8 +157,16 @@ function M:peek(job)
 	end
 
 	-- Generate query.
+	-- If the cache does not exist yet, try preloading.
 	local query = string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
 	ya.dbg("Peek - SQL Query: " .. query)
+	if not fs.cha(cache) then
+		ya.dbg("Peek - Cache not found on disk, attempting to preload")
+		if not self:preload(job) then
+			ya.dbg("Peek - Preload failed. Reading from file.")
+			query = generate_sql(job, mode) .. ";"
+		end
+	end
 
 	-- Run query.
 	local child =
