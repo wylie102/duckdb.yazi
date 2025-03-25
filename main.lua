@@ -1,10 +1,9 @@
 -- This function generates the SQL query based on the preview mode.
 local function generate_sql(job, mode)
-	local initial_query = ""
 	if mode == "standard" then
-		initial_query = string.format("SELECT * FROM '%s' LIMIT 500", tostring(job.file.url))
+		return string.format("SELECT * FROM '%s' LIMIT 500", tostring(job.file.url))
 	else
-		initial_query = string.format(
+		return string.format(
 			[[
     SELECT
         column_name AS column,
@@ -69,17 +68,14 @@ local function generate_sql(job, mode)
 			tostring(job.file.url)
 		)
 	end
-	return initial_query
 end
 
 local function get_table_name(mode)
-	local queried_table = nil
 	if mode == "standard" then
-		queried_table = "Standard"
+		return "Standard"
 	else
-		queried_table = "Summarized"
+		return "Summarized"
 	end
-	return queried_table
 end
 
 local function run_query(job, query, target)
@@ -98,17 +94,21 @@ local function run_query(job, query, target)
 		ya.dbg("DuckDB command error: " .. tostring(err))
 		return require("code"):peek(job)
 	end
+
+	if not output.status.success then
+		ya.err("DuckDB exited with error: " .. output.stderr)
+		return require("code"):peek(job)
+	end
+
 	return output
 end
 
 local function generate_query(target, job, limit, mode, offset)
-	local query = nil
-	if target == cache then
-		local queried_table = get_table_name(mode)
-		query = string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
+	if target == job.file.url then
+		return generate_sql(job, mode) .. ";"
 	else
-		query = generate_sql(job, mode) .. ";"
-		return query
+		local queried_table = get_table_name(mode)
+		return string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
 	end
 end
 
@@ -175,7 +175,7 @@ function M:peek(job)
 	local mode = os.getenv("DUCKDB_PREVIEW_MODE") or "summarized"
 	local file_url = job.file.url
 	ya.dbg("Peek - file:" .. tostring(file_url))
-	ya.dbg("Peek - mtime:" .. tostring(file_url.mtime))
+	ya.dbg("Peek - mtime:" .. tostring(job.file.cha.mtime))
 	ya.dbg("Peek - Cache path: " .. tostring(cache))
 	ya.dbg("Peek - Limit: " .. tostring(limit) .. ", Offset: " .. tostring(offset))
 	local target = cache
@@ -209,11 +209,11 @@ function M:peek(job)
 		else
 			return require("code"):peek(job)
 		end
-
-		-- If query returns data, log success and preview.
-		ya.dbg("Peek - Query succesfully returned data.")
-		ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 	end
+
+	-- If query returns data, log success and preview.
+	ya.dbg("Peek - Query succesfully returned data.")
+	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 end
 
 -- Seek function.
