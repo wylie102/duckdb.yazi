@@ -96,18 +96,18 @@ local function run_query(job, query, target)
 
 	if not child then
 		ya.dbg("Peek - Failed to spawn DuckDB command, falling back")
-		return require("code"):peek(job)
+		return nil
 	end
 
 	local output, err = child:wait_with_output()
 	if err then
 		ya.dbg("DuckDB command error: " .. tostring(err))
-		return require("code"):peek(job)
+		return nil
 	end
 
 	if not output.status.success then
 		ya.err("DuckDB exited with error: " .. output.stderr)
-		return require("code"):peek(job)
+		return nil
 	end
 
 	return output
@@ -208,15 +208,19 @@ function M:peek(job)
 	local output = run_query(job, query, target)
 
 	-- If query returns no output then use standard previewer.
-	if output.stdout == "" then
+	if not output or output.stdout == "" then
 		ya.err("Peek - duckdb returned no output")
 		ya.dbg("Peek - target:" .. tostring(target))
-		if target == cache then
+		if target ~= file_url then
 			target = file_url
+
 			-- Generate and run query.
 			query = generate_query(target, job, limit, mode, offset)
 			ya.dbg("Peek - Second query:" .. tostring(query))
 			output = run_query(job, query, target)
+			if not output or output.stdout == "" then
+				return require("code"):peek(job)
+			end
 		else
 			return require("code"):peek(job)
 		end
