@@ -70,7 +70,7 @@ local function generate_sql(job, mode)
 	end
 end
 
-local function get_cache_path(job, mode)
+local function get_cache_path(job, type)
 	local skip = job.skip
 	job.skip = 0
 
@@ -81,7 +81,12 @@ local function get_cache_path(job, mode)
 		return nil
 	end
 
-	local suffix = mode == "summarized" and "_summarized.db" or "_standard.db"
+	local suffix = ({
+		standard = "_standard.db",
+		summarized = "_summarized.db",
+		mode = "_mode.db",
+	})[type or "standard"]
+
 	return Url(tostring(base) .. suffix)
 end
 
@@ -129,8 +134,15 @@ local function create_cache(job, mode, path)
 
 	ya.dbg("Preload - Creating " .. mode .. " cache for file: " .. tostring(filename))
 	local start_time = ya.time()
-	local sql = string.format("CREATE TABLE My_table AS (%s);", generate_sql(job, mode))
-	local out = run_query(job, sql, path)
+
+	local sql
+	if mode == "mode" then
+		sql = "CREATE TABLE My_table AS SELECT 'standard' AS Preview_mode;"
+	else
+		sql = string.format("CREATE TABLE My_table AS (%s);", generate_sql(job, mode))
+	end
+
+	local out = run_query(job, sql, path, mode == "mode" and "mode" or nil)
 	local elapsed = ya.time() - start_time
 
 	if not out then
@@ -149,16 +161,67 @@ local function create_cache(job, mode, path)
 	end
 end
 
-local function generate_query(target, job, limit, mode, offset)
+local function get_preview_mode(job)
+	local mode = "standard"
+	local mode_cache = get_cache_path(job, "mode")
+
+	if not mode_cache then
+		return mode
+	end
+
+	if not fs.cha(mode_cache) then
+		ya.dbg("Mode cache not found, creating one with default 'standard'.")
+		create_cache(job, "mode", mode_cache)
+	end
+
+	local result = run_query(job, "SELECT Preview_mode FROM My_table LIMIT 1;", mode_cache, "mode")
+	if result and result.stdout and result.stdout ~= "" then
+		local value = result.stdout:lower()
+		if value:match("summarized") then
+			mode = "summarized"
+		elseif value:match("standard") then
+			mode = "standard"
+		end
+	else
+		ya.dbg("Mode cache exists but couldn't read Preview_mode.")
+	end
+
+	return mode
+end
+
+local function generate_query(target, job, limit, offset)
+	local mode = get_preview_mode(job)
+
 	if target == job.file.url then
 		if mode == "standard" then
 			return string.format("SELECT * FROM '%s' LIMIT %d OFFSET %d;", tostring(target), limit, offset)
 		else
 			local query = generate_sql(job, mode)
-			return string.format("WITH query as (%s) SELECT * FROM query LIMIT %d OFFSET %d;", query, limit, offset)
+			return string.format("WITH query AS (%s) SELECT * FROM query LIMIT %d OFFSET %d;", query, limit, offset)
 		end
 	else
 		return string.format("SELECT * FROM My_table LIMIT %d OFFSET %d;", limit, offset)
+	end
+end
+
+local function set_preview_mode(job, mode)
+	local mode_cache = get_cache_path(job, "mode")
+	if not mode_cache then
+		ya.err("SetPreviewMode - Could not compute mode cache path.")
+		return false
+	end
+
+	-- Wipe and insert new mode
+	run_query(job, "DELETE FROM My_table;", mode_cache, "mode")
+	local sql = string.format("INSERT INTO My_table VALUES ('%s');", mode)
+	local result = run_query(job, sql, mode_cache, "mode")
+
+	if result then
+		ya.dbg("SetPreviewMode - Mode set to: " .. mode)
+		return true
+	else
+		ya.err("SetPreviewMode - Failed to update preview mode.")
+		return false
 	end
 end
 
@@ -188,45 +251,35 @@ end
 
 -- Peek Function
 function M:peek(job)
-	-- store cache and mode variables.
-
-	local mode = tostring(os.getenv("DUCKDB_PREVIEW_MODE") or "standard"):lower()
-	if mode ~= "standard" and mode ~= "summarized" then
-		mode = "standard"
+	-- 🔁 Toggle preview mode if skip is less than 5
+	if job.skip and job.skip < 5 then
+		local current_mode = get_preview_mode(job)
+		local new_mode = current_mode == "standard" and "summarized" or "standard"
+		set_preview_mode(job, new_mode)
+		job.skip = 0
 	end
 
+	local mode = get_preview_mode(job)
 	local cache = get_cache_path(job, mode)
 	local file_url = job.file.url
 	local target = cache
 
-	-- store offset and limit variables
 	local limit = job.area.h - 7
 	local offset = job.skip or 0
 
-	-- if no cache url use default previewer.
-	if not cache then
-		ya.err("Peek - No cache url found. Querying file directly.")
+	if not cache or not fs.cha(cache) then
+		ya.dbg("Peek - Cache not found on disk, querying file directly.")
 		target = file_url
 	end
 
-	-- If the cache does not exist yet, query file directly.
-	if not fs.cha(cache) then
-		ya.dbg("Peek - Cache not found on disk, Querying file directly.")
-		target = file_url
-	end
-
-	-- Generate and run query.
-	local query = generate_query(target, job, limit, mode, offset)
+	local query = generate_query(target, job, limit, offset)
 	local output = run_query(job, query, target)
 
-	-- If query returns no output then use standard previewer.
 	if not output or output.stdout == "" then
-		ya.err("Peek - duckdb returned no output from target:" .. tostring(target))
+		ya.err("Peek - DuckDB returned no output from target: " .. tostring(target))
 		if target ~= file_url then
 			target = file_url
-
-			-- Generate and run query.
-			query = generate_query(target, job, limit, mode, offset)
+			query = generate_query(target, job, limit, offset)
 			output = run_query(job, query, target)
 			if not output or output.stdout == "" then
 				return require("code"):peek(job)
@@ -236,7 +289,6 @@ function M:peek(job)
 		end
 	end
 
-	-- If query returns data, log success and preview.
 	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 end
 
@@ -244,12 +296,16 @@ end
 function M:seek(job)
 	ya.dbg("Seek - file:" .. tostring(job.file.url))
 	ya.dbg("Seek - mtime:" .. tostring(job.file.cha.mtime))
+
 	local h = cx.active.current.hovered
 	if not h or h.url ~= job.file.url then
 		return
 	end
+
 	local current_skip = cx.active.preview.skip or 0
-	local new_skip = math.max(0, current_skip + job.units)
+	local new_skip = current_skip + job.units
+
+	-- Always pass the raw skip — peek() handles toggle if it's < 5
 	ya.manager_emit("peek", { new_skip, only_if = job.file.url })
 end
 
