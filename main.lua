@@ -251,13 +251,20 @@ end
 
 -- Peek Function
 function M:peek(job)
-	-- 🔁 Toggle preview mode if skip is less than 5
-	if job.skip and job.skip < 5 then
+	local raw_skip = job.skip or 0
+	local skip = math.max(0, raw_skip - 50)
+
+	ya.dbg(string.format("Peek - raw_skip: %d, adjusted skip: %d", raw_skip, skip))
+
+	-- Toggle mode if within special range
+	if raw_skip > 0 and raw_skip < 50 then
 		local current_mode = get_preview_mode(job)
 		local new_mode = current_mode == "standard" and "summarized" or "standard"
 		set_preview_mode(job, new_mode)
-		job.skip = 0
+		skip = 0
 	end
+
+	job.skip = skip
 
 	local mode = get_preview_mode(job)
 	local cache = get_cache_path(job, mode)
@@ -265,7 +272,9 @@ function M:peek(job)
 	local target = cache
 
 	local limit = job.area.h - 7
-	local offset = job.skip or 0
+	local offset = skip
+
+	ya.dbg(string.format("Peek - LIMIT: %d, OFFSET: %d", limit, offset))
 
 	if not cache or not fs.cha(cache) then
 		ya.dbg("Peek - Cache not found on disk, querying file directly.")
@@ -273,6 +282,8 @@ function M:peek(job)
 	end
 
 	local query = generate_query(target, job, limit, offset)
+	ya.dbg("Peek - Generated SQL:\n" .. query)
+
 	local output = run_query(job, query, target)
 
 	if not output or output.stdout == "" then
@@ -297,16 +308,24 @@ function M:seek(job)
 	ya.dbg("Seek - file:" .. tostring(job.file.url))
 	ya.dbg("Seek - mtime:" .. tostring(job.file.cha.mtime))
 
-	local h = cx.active.current.hovered
-	if not h or h.url ~= job.file.url then
-		return
-	end
+	local OFFSET_BASE = 50
 
-	local current_skip = cx.active.preview.skip or 0
-	local new_skip = current_skip + job.units
+	-- Decode skip from cx (which has the encoded value)
+	local encoded_current_skip = cx.active.preview.skip or 0
+	local current_skip = math.max(0, encoded_current_skip - OFFSET_BASE)
+	local units = job.units or 0
 
-	-- Always pass the raw skip — peek() handles toggle if it's < 5
-	ya.manager_emit("peek", { new_skip, only_if = job.file.url })
+	ya.dbg(string.format("Seek - encoded skip from cx: %d", encoded_current_skip))
+	ya.dbg(string.format("Seek - decoded current skip: %d", current_skip))
+	ya.dbg(string.format("Seek - job.units: %d", units))
+
+	local new_skip = current_skip + units
+	local encoded_skip = new_skip + OFFSET_BASE
+
+	ya.dbg(string.format("Seek - computed new_skip: %d", new_skip))
+	ya.dbg(string.format("Seek - sending encoded skip: %d", encoded_skip))
+
+	ya.manager_emit("peek", { encoded_skip, only_if = job.file.url })
 end
 
 return M
