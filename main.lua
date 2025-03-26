@@ -70,12 +70,19 @@ local function generate_sql(job, mode)
 	end
 end
 
-local function get_table_name(mode)
-	if mode == "standard" then
-		return "Standard"
-	else
-		return "Summarized"
+local function get_cache_paths(job, mode)
+	local skip = job.skip
+	job.skip = 0
+
+	local base = ya.file_cache(job)
+
+	job.skip = skip
+	if not base then
+		return nil
 	end
+
+	local suffix = mode == "summarized" and "_summarized.db" or "_standard.db"
+	return Url(tostring(base) .. suffix)
 end
 
 local function run_query(job, query, target)
@@ -89,13 +96,14 @@ local function run_query(job, query, target)
 	table.insert(args, "-c")
 	table.insert(args, query)
 
+	ya.dbg("Running DuckDB query on: " .. tostring(job.file.url.name))
 	ya.dbg("Running DuckDB query with args: " .. table.concat(args, " "))
 
 	-- run query
 	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 
 	if not child then
-		ya.dbg("Peek - Failed to spawn DuckDB command, falling back")
+		ya.dbg("Failed to spawn DuckDB command, falling back")
 		return nil
 	end
 
@@ -113,6 +121,23 @@ local function run_query(job, query, target)
 	return output
 end
 
+local function ensure_cache(job, mode, path)
+	if fs.cha(path) then
+		return true
+	end
+
+	ya.dbg("Preload - Creating " .. mode .. " cache at: " .. tostring(path))
+	local sql = string.format("CREATE TABLE My_table AS (%s);", generate_sql(job, mode))
+	local out = run_query(job, sql, path)
+	if not out then
+		ya.err("Preload - Failed to generate " .. mode .. " cache.")
+		return false
+	else
+		ya.dbg("Preload - " .. mode:sub(1, 1):upper() .. mode:sub(2) .. " cache created.")
+		return true
+	end
+end
+
 local function generate_query(target, job, limit, mode, offset)
 	if target == job.file.url then
 		if mode == "standard" then
@@ -122,8 +147,7 @@ local function generate_query(target, job, limit, mode, offset)
 			return string.format("WITH query as (%s) SELECT * FROM query LIMIT %d OFFSET %d;", query, limit, offset)
 		end
 	else
-		local queried_table = get_table_name(mode)
-		return string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", queried_table, limit, offset)
+		return string.format("SELECT * FROM My_table LIMIT %d OFFSET %d;", limit, offset)
 	end
 end
 
@@ -131,69 +155,54 @@ local M = {}
 
 -- Preload function: outputs the query result to a parquet file (cache) using DuckDB's COPY.
 function M:preload(job)
-	local cache = ya.file_cache(job)
-	if not cache then
-		ya.dbg("Preload - No cache url found.")
+	ya.dbg("Preload - Entered preload function for: " .. tostring(job.file.url))
+	local cache_standard = get_cache_paths(job, "standard")
+	local cache_summarized = get_cache_paths(job, "summarized")
+	if not cache_standard or not cache_summarized then
+		ya.err("Preload - Could not compute cache paths.")
 		return false
 	end
 
-	-- If the cache file already exists, no need to preload.
-	if fs.cha(cache) then
-		ya.dbg("Preload - Cache already exists (fs.cha returned true)")
+	-- Derive separate cache paths for each mode
+	ya.dbg("Standard cache:" .. tostring(cache_standard))
+	ya.dbg("Summarized cache:" .. tostring(cache_summarized))
+	local cha = fs.cha(cache_standard)
+	ya.dbg("Preload - cha_standard: " .. tostring(cha))
+	cha = fs.cha(cache_summarized)
+	ya.dbg("Preload - cha_summarized: " .. tostring(cha))
+
+	-- If both caches exist, skip preload entirely
+	if fs.cha(cache_standard) and fs.cha(cache_summarized) then
+		ya.dbg("Preload - Both caches already exist.")
 		return true
 	end
 
-	-- Generate basic sql statements.
-	local standard_sql = generate_sql(job, "standard")
-	local summarized_sql = generate_sql(job, "summarized")
-	ya.dbg("Preload -  basic query statements returned.")
-
-	-- Generate create table statements.
-	local create_table_standard = string.format("CREATE TABLE Standard AS (%s);", standard_sql)
-	local create_table_summarized = string.format("CREATE TABLE Summarized AS (%s);", summarized_sql)
-	ya.dbg("Preload - create table statements returned.")
-
-	-- Sleep for 0.01s to avoid blocking peek process on first file highlighted.
-	-- ya.sleep(0.01)
-
-	-- Create database and run queries to create tables.
-	local child = Command("duckdb")
-		:args({ tostring(cache), "-c", create_table_summarized, "-c", create_table_standard })
-		:stdout(Command.PIPED)
-		:stderr(Command.PIPED)
-		:spawn()
-	if not child then
-		ya.dbg("Preload - Failed to initialise db and store created tables.")
-		return false
-	end
-
-	-- Wait for completion and return any errors.
-	local output, err = child:wait_with_output()
-	if err or not output or (output.stderr and output.stderr ~= "") then
-		ya.err("DuckDB preloader error: " .. (err or output.stderr))
-		return false
-	end
-
-	-- tables created.
-	ya.dbg("Preload - Db and tables created.")
-	return true
+	-- Run queries separately using run_query()
+	local success = true
+	success = ensure_cache(job, "standard", cache_standard) and success
+	success = ensure_cache(job, "summarized", cache_summarized) and success
+	return success
 end
 
 -- Peek Function
 function M:peek(job)
 	-- store cache and mode variables.
+
+	local mode = tostring(os.getenv("DUCKDB_PREVIEW_MODE") or "standard"):lower()
+	if mode ~= "standard" and mode ~= "summarized" then
+		mode = "standard"
+	end
+
+	local cache = get_cache_paths(job, mode)
+	local file_url = job.file.url
+	local target = cache
+
+	-- store offset and limit variables
 	local limit = job.area.h - 7
 	local offset = job.skip or 0
-	job.skip = 0
-	local cache = ya.file_cache(job)
-	job.skip = offset
-	local mode = os.getenv("DUCKDB_PREVIEW_MODE") or "standard"
-	local file_url = job.file.url
-	ya.dbg("Peek - file:" .. tostring(file_url))
-	ya.dbg("Peek - mtime:" .. tostring(job.file.cha.mtime))
+	ya.dbg("Peek - file: " .. tostring(file_url))
 	ya.dbg("Peek - Cache path: " .. tostring(cache))
 	ya.dbg("Peek - Limit: " .. tostring(limit) .. ", Offset: " .. tostring(offset))
-	local target = cache
 
 	-- if no cache url use default previewer.
 	if not cache then
