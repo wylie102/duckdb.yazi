@@ -1,12 +1,19 @@
 -- DuckDB Plugin for Yazi
 local M = {}
-local st = {}
+
+local set_mode = ya.sync(function(state, mode)
+	state.mode = mode
+end)
+
+local get_mode = ya.sync(function(state)
+	return state.mode or "summarized"
+end)
 
 -- Setup from init.lua: require("duckdb"):setup({ mode = "standard" })
-function M:setup(_, opts)
-	st.mode = opts and opts.mode or "summarized"
-	ya.dbg("DuckDB plugin setup called")
-	ya.dbg("DuckDB plugin default mode: " .. st.mode)
+function M:setup(opts)
+	local default_mode = opts and opts.mode or "summarized"
+	set_mode(default_mode)
+	ya.dbg("Setup - Preview mode initialized to: " .. default_mode)
 end
 
 -- Full summarized SQL
@@ -120,6 +127,20 @@ local function create_cache(job, mode, path)
 	return out ~= nil
 end
 
+local function generate_query(target, job, limit, offset)
+	local mode = get_mode()
+	if target == job.file.url then
+		if mode == "standard" then
+			return string.format("SELECT * FROM '%s' LIMIT %d OFFSET %d;", tostring(target), limit, offset)
+		else
+			local query = generate_sql(job, mode)
+			return string.format("WITH query AS (%s) SELECT * FROM query LIMIT %d OFFSET %d;", query, limit, offset)
+		end
+	else
+		return string.format("SELECT * FROM My_table LIMIT %d OFFSET %d;", limit, offset)
+	end
+end
+
 -- Preload summarized and standard preview caches
 function M:preload(job)
 	for _, mode in ipairs({ "standard", "summarized" }) do
@@ -136,33 +157,39 @@ end
 function M:peek(job)
 	local raw_skip = job.skip or 0
 	local skip = math.max(0, raw_skip - 50)
+	job.skip = skip
 
 	ya.dbg(string.format("Peek - raw_skip: %d | adjusted skip: %d", raw_skip, skip))
 
-	if raw_skip > 0 and raw_skip < 50 then
-		st.mode = (st.mode == "summarized") and "standard" or "summarized"
-		ya.dbg("Toggled preview mode to: " .. st.mode)
-		ya.manager_emit("peek", { 0, only_if = job.file.url })
-		return
-	end
+	local mode = get_mode()
+	ya.dbg("Peek - Mode from state: " .. mode)
 
-	job.skip = skip
-	local mode = st.mode or "summarized"
-	ya.dbg("Generating preview in mode: " .. mode)
 	local cache = get_cache_path(job, mode)
-	local target = (cache and fs.cha(cache)) and cache or job.file.url
-	local sql = string.format(
-		"WITH preview AS (%s) SELECT * FROM preview LIMIT %d OFFSET %d;",
-		generate_sql(job, mode),
-		job.area.h - 7,
-		skip
-	)
-	ya.dbg("Final SQL:\n" .. sql)
+	local file_url = job.file.url
+	local target = (cache and fs.cha(cache)) and cache or file_url
 
-	local output = run_query(job, sql, target)
+	local limit = job.area.h - 7
+	local offset = skip
+	local query = generate_query(target, job, limit, offset)
+
+	local output = run_query(job, query, target)
+
 	if not output or output.stdout == "" then
-		ya.dbg("Falling back to code preview")
-		return require("code"):peek(job)
+		ya.dbg("Peek - No output from cache. Trying file directly.")
+
+		if target ~= file_url then
+			target = file_url
+			query = generate_query(target, job, limit, offset)
+			output = run_query(job, query, target)
+
+			if not output or output.stdout == "" then
+				ya.dbg("Peek - Fallback to file also failed. Showing default code preview.")
+				return require("code"):peek(job)
+			end
+		else
+			ya.dbg("Peek - No output and target was already file. Showing default code preview.")
+			return require("code"):peek(job)
+		end
 	end
 
 	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
@@ -171,19 +198,22 @@ end
 -- Seek with debug output
 function M:seek(job)
 	local OFFSET_BASE = 50
-	local encoded_current_skip = cx.active.preview.skip or 0
-	local current_skip = math.max(0, encoded_current_skip - OFFSET_BASE)
+	local current_skip = math.max(0, cx.active.preview.skip - OFFSET_BASE)
 	local units = job.units or 0
 	local new_skip = current_skip + units
-	local encoded_skip = new_skip + OFFSET_BASE
 
-	ya.dbg("Seek - file: " .. tostring(job.file.url))
-	ya.dbg("Seek - encoded_current_skip: " .. encoded_current_skip)
-	ya.dbg("Seek - decoded current skip: " .. current_skip)
-	ya.dbg("Seek - job.units: " .. units)
-	ya.dbg("Seek - new skip: " .. new_skip .. " | re-encoded: " .. encoded_skip)
+	if new_skip < 0 then
+		-- Toggle preview mode
+		local mode = get_mode()
+		local new_mode = (mode == "summarized") and "standard" or "summarized"
+		set_mode(new_mode)
+		ya.dbg("Seek - Toggled mode to: " .. new_mode)
 
-	ya.manager_emit("peek", { encoded_skip, only_if = job.file.url })
+		-- Trigger re-peek
+		ya.manager_emit("peek", { OFFSET_BASE, only_if = job.file.url })
+	else
+		ya.manager_emit("peek", { new_skip + OFFSET_BASE, only_if = job.file.url })
+	end
 end
 
 return M
