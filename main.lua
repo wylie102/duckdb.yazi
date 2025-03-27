@@ -5,7 +5,8 @@ local st = {}
 -- Setup from init.lua: require("duckdb"):setup({ mode = "standard" })
 function M:setup(_, opts)
 	st.mode = opts and opts.mode or "summarized"
-	ya.dbg("DuckDB plugin setup with default mode: " .. st.mode)
+	ya.dbg("DuckDB plugin setup called")
+	ya.dbg("DuckDB plugin default mode: " .. st.mode)
 end
 
 -- Full summarized SQL
@@ -14,7 +15,8 @@ local function generate_sql(job, mode)
 		return string.format("SELECT * FROM '%s' LIMIT 500", tostring(job.file.url))
 	else
 		return string.format(
-			[[SELECT
+			[[
+			SELECT
 				column_name AS column,
 				column_type AS type,
 				count,
@@ -78,6 +80,7 @@ local function generate_sql(job, mode)
 	end
 end
 
+-- Get preview cache path
 local function get_cache_path(job, mode)
 	local skip = job.skip
 	job.skip = 0
@@ -117,7 +120,7 @@ local function create_cache(job, mode, path)
 	return out ~= nil
 end
 
--- Preload both cache types
+-- Preload summarized and standard preview caches
 function M:preload(job)
 	for _, mode in ipairs({ "standard", "summarized" }) do
 		local path = get_cache_path(job, mode)
@@ -129,10 +132,12 @@ function M:preload(job)
 	return true
 end
 
--- Peek preview (with toggle-on-scroll-top logic)
+-- Peek with mode toggle if scrolling at top
 function M:peek(job)
 	local raw_skip = job.skip or 0
 	local skip = math.max(0, raw_skip - 50)
+
+	ya.dbg(string.format("Peek - raw_skip: %d | adjusted skip: %d", raw_skip, skip))
 
 	if raw_skip > 0 and raw_skip < 50 then
 		st.mode = (st.mode == "summarized") and "standard" or "summarized"
@@ -143,26 +148,41 @@ function M:peek(job)
 
 	job.skip = skip
 	local mode = st.mode or "summarized"
+	ya.dbg("Generating preview in mode: " .. mode)
 	local cache = get_cache_path(job, mode)
 	local target = (cache and fs.cha(cache)) and cache or job.file.url
-	local query = generate_sql(job, mode)
-	local sql =
-		string.format("WITH preview AS (%s) SELECT * FROM preview LIMIT %d OFFSET %d;", query, job.area.h - 7, skip)
-
-	ya.dbg("Generating preview in mode: " .. mode)
+	local sql = string.format(
+		"WITH preview AS (%s) SELECT * FROM preview LIMIT %d OFFSET %d;",
+		generate_sql(job, mode),
+		job.area.h - 7,
+		skip
+	)
+	ya.dbg("Final SQL:\n" .. sql)
 
 	local output = run_query(job, sql, target)
 	if not output or output.stdout == "" then
 		ya.dbg("Falling back to code preview")
 		return require("code"):peek(job)
 	end
+
 	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 end
 
--- Handle scrolling
+-- Seek with debug output
 function M:seek(job)
-	local OFFSET = 50
-	local encoded_skip = math.max(0, (cx.active.preview.skip or 0) - OFFSET) + (job.units or 0) + OFFSET
+	local OFFSET_BASE = 50
+	local encoded_current_skip = cx.active.preview.skip or 0
+	local current_skip = math.max(0, encoded_current_skip - OFFSET_BASE)
+	local units = job.units or 0
+	local new_skip = current_skip + units
+	local encoded_skip = new_skip + OFFSET_BASE
+
+	ya.dbg("Seek - file: " .. tostring(job.file.url))
+	ya.dbg("Seek - encoded_current_skip: " .. encoded_current_skip)
+	ya.dbg("Seek - decoded current skip: " .. current_skip)
+	ya.dbg("Seek - job.units: " .. units)
+	ya.dbg("Seek - new skip: " .. new_skip .. " | re-encoded: " .. encoded_skip)
+
 	ya.manager_emit("peek", { encoded_skip, only_if = job.file.url })
 end
 
