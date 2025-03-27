@@ -12,20 +12,25 @@ ya pack -a wylie102/duckdb
 
 and add to your yazi.toml:
 
-[plugin]  
-prepend_previewers = [  
-  { mime = "text/csv", run = "duckdb" },  
-  { name = "*.tsv", run = "duckdb" },  
-  { name = "*.json", run = "duckdb" },  
-  { name = "*.parquet", run = "duckdb" },  
-]
+    [plugin]  
+    prepend_previewers = [  
+      { mime = "text/csv", run = "duckdb" },  
+      { name = "*.tsv", run = "duckdb" },  
+      { name = "*.json", run = "duckdb" },  
+      { name = "*.parquet", run = "duckdb" },  
+    ]
 
-prepend_preloaders = [  
-  { mime = "text/csv", run = "duckdb", multi = false },  
-  { name = "*.tsv", run = "duckdb", multi = false },  
-  { name = "*.json", run = "duckdb", multi = false },  
-  { name = "*.parquet", run = "duckdb", multi = false },  
-]
+    prepend_preloaders = [  
+      { mime = "text/csv", run = "duckdb", multi = false },  
+      { name = "*.tsv", run = "duckdb", multi = false },  
+      { name = "*.json", run = "duckdb", multi = false },  
+      { name = "*.parquet", run = "duckdb", multi = false },  
+    ]
+
+If you want to change the default view then create an init.lua file in your yazi folder (where your plugin folder and yazi.toml file live. Add the following:
+
+    -- duckdb plugin
+    require("duckdb"):setup({ mode = "standard" })
 
 ### Yazi
 
