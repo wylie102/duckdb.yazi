@@ -1,4 +1,14 @@
--- This function generates the SQL query based on the preview mode.
+-- DuckDB Plugin for Yazi
+local M = {}
+local st = {}
+
+-- Setup from init.lua: require("duckdb"):setup({ mode = "standard" })
+function M:setup(_, opts)
+	st.mode = opts and opts.mode or "summarized"
+	ya.dbg("DuckDB plugin setup with default mode: " .. st.mode)
+end
+
+-- Full summarized SQL
 local function generate_sql(job, mode)
 	if mode == "standard" then
 		return string.format("SELECT * FROM '%s' LIMIT 500", tostring(job.file.url))
@@ -68,7 +78,7 @@ local function generate_sql(job, mode)
 	end
 end
 
-local function get_cache_path(job, type)
+local function get_cache_path(job, mode)
 	local skip = job.skip
 	job.skip = 0
 	local base = ya.file_cache(job)
@@ -76,8 +86,7 @@ local function get_cache_path(job, type)
 	if not base then
 		return nil
 	end
-	local suffix = ({ standard = "_standard.db", summarized = "_summarized.db", mode = "_mode.db" })[type or "standard"]
-	return Url(tostring(base) .. suffix)
+	return Url(tostring(base) .. "_" .. mode .. ".db")
 end
 
 local function run_query(job, query, target)
@@ -92,139 +101,68 @@ local function run_query(job, query, target)
 		return nil
 	end
 	local output, err = child:wait_with_output()
-	if err then
-		return nil
-	end
-	if not output.status.success then
-		ya.err("DuckDB exited with error: " .. output.stderr)
+	if err or not output.status.success then
+		ya.err("DuckDB error: " .. (err or output.stderr))
 		return nil
 	end
 	return output
 end
 
 local function create_cache(job, mode, path)
-	local filename = job.file.url:name() or "unknown"
 	if fs.cha(path) then
 		return true
 	end
-	local sql = (mode == "mode") and "CREATE TABLE My_table AS SELECT 'standard' AS Preview_mode;"
-		or string.format("CREATE TABLE My_table AS (%s);", generate_sql(job, mode))
-	local out = run_query(job, sql, path, mode == "mode" and "mode" or nil)
-	if not out then
-		ya.err("Preload - Failed to generate " .. mode .. " cache for file: " .. tostring(filename) .. ".")
-		return false
-	end
-	return true
+	local sql = generate_sql(job, mode)
+	local out = run_query(job, string.format("CREATE TABLE My_table AS (%s);", sql), path)
+	return out ~= nil
 end
 
-local function get_preview_mode(job)
-	local mode = "standard"
-	local mode_cache = get_cache_path(job, "mode")
-	if not mode_cache then
-		return mode
-	end
-	if not fs.cha(mode_cache) then
-		create_cache(job, "mode", mode_cache)
-	end
-	local result = run_query(job, "SELECT Preview_mode FROM My_table LIMIT 1;", mode_cache, "mode")
-	if result and result.stdout and result.stdout ~= "" then
-		local value = result.stdout:lower()
-		if value:match("summarized") then
-			mode = "summarized"
-		end
-	end
-	return mode
-end
-
-local function generate_query(target, job, limit, offset)
-	local mode = get_preview_mode(job)
-	if target == job.file.url then
-		if mode == "standard" then
-			return string.format("SELECT * FROM '%s' LIMIT %d OFFSET %d;", tostring(target), limit, offset)
-		else
-			local query = generate_sql(job, mode)
-			return string.format("WITH query AS (%s) SELECT * FROM query LIMIT %d OFFSET %d;", query, limit, offset)
-		end
-	else
-		return string.format("SELECT * FROM My_table LIMIT %d OFFSET %d;", limit, offset)
-	end
-end
-
-local function set_preview_mode(job, mode)
-	local mode_cache = get_cache_path(job, "mode")
-	if not mode_cache then
-		return false
-	end
-	run_query(job, "DELETE FROM My_table;", mode_cache, "mode")
-	local sql = string.format("INSERT INTO My_table VALUES ('%s');", mode)
-	local result = run_query(job, sql, mode_cache, "mode")
-	if not result then
-		ya.err("SetPreviewMode - Failed to update preview mode.")
-		return false
-	end
-	return true
-end
-
-local M = {}
-
+-- Preload both cache types
 function M:preload(job)
-	local cache_standard = get_cache_path(job, "standard")
-	local cache_summarized = get_cache_path(job, "summarized")
-	if not cache_standard or not cache_summarized then
-		return false
+	for _, mode in ipairs({ "standard", "summarized" }) do
+		local path = get_cache_path(job, mode)
+		if path and not fs.cha(path) then
+			ya.dbg("Creating cache for mode: " .. mode)
+			create_cache(job, mode, path)
+		end
 	end
-	if fs.cha(cache_standard) and fs.cha(cache_summarized) then
-		return true
-	end
-	local success = true
-	success = create_cache(job, "standard", cache_standard) and success
-	success = create_cache(job, "summarized", cache_summarized) and success
-	return success
+	return true
 end
 
+-- Peek preview (with toggle-on-scroll-top logic)
 function M:peek(job)
 	local raw_skip = job.skip or 0
 	local skip = math.max(0, raw_skip - 50)
+
 	if raw_skip > 0 and raw_skip < 50 then
-		local current_mode = get_preview_mode(job)
-		local new_mode = current_mode == "standard" and "summarized" or "standard"
-		set_preview_mode(job, new_mode)
-		skip = 0
+		st.mode = (st.mode == "summarized") and "standard" or "summarized"
+		ya.dbg("Toggled preview mode to: " .. st.mode)
+		ya.manager_emit("peek", { 0, only_if = job.file.url })
+		return
 	end
+
 	job.skip = skip
-	local mode = get_preview_mode(job)
+	local mode = st.mode or "summarized"
 	local cache = get_cache_path(job, mode)
-	local file_url = job.file.url
-	local target = cache
-	local limit = job.area.h - 7
-	local offset = skip
-	if not cache or not fs.cha(cache) then
-		target = file_url
-	end
-	local query = generate_query(target, job, limit, offset)
-	local output = run_query(job, query, target)
+	local target = (cache and fs.cha(cache)) and cache or job.file.url
+	local query = generate_sql(job, mode)
+	local sql =
+		string.format("WITH preview AS (%s) SELECT * FROM preview LIMIT %d OFFSET %d;", query, job.area.h - 7, skip)
+
+	ya.dbg("Generating preview in mode: " .. mode)
+
+	local output = run_query(job, sql, target)
 	if not output or output.stdout == "" then
-		if target ~= file_url then
-			target = file_url
-			query = generate_query(target, job, limit, offset)
-			output = run_query(job, query, target)
-			if not output or output.stdout == "" then
-				return require("code"):peek(job)
-			end
-		else
-			return require("code"):peek(job)
-		end
+		ya.dbg("Falling back to code preview")
+		return require("code"):peek(job)
 	end
 	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 end
 
+-- Handle scrolling
 function M:seek(job)
-	local OFFSET_BASE = 50
-	local encoded_current_skip = cx.active.preview.skip or 0
-	local current_skip = math.max(0, encoded_current_skip - OFFSET_BASE)
-	local units = job.units or 0
-	local new_skip = current_skip + units
-	local encoded_skip = new_skip + OFFSET_BASE
+	local OFFSET = 50
+	local encoded_skip = math.max(0, (cx.active.preview.skip or 0) - OFFSET) + (job.units or 0) + OFFSET
 	ya.manager_emit("peek", { encoded_skip, only_if = job.file.url })
 end
 
