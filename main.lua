@@ -100,21 +100,32 @@ local function get_cache_path(job, mode)
 end
 
 local function run_query(job, query, target)
-	local args = {}
-	if target ~= job.file.url then
-		table.insert(args, tostring(target))
+	local db_path = (target ~= job.file.url) and tostring(target) or ""
+	local escaped_query = query -- don't quote it — we’ll pass it as an arg
+	local args = { "-q", "/dev/null", "duckdb" }
+
+	if db_path ~= "" then
+		table.insert(args, db_path)
 	end
+
 	table.insert(args, "-c")
-	table.insert(args, query)
-	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+	table.insert(args, escaped_query)
+
+	ya.dbg("Running script with args: " .. table.concat(args, " "))
+
+	local child = Command("script"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+
 	if not child then
+		ya.err("Failed to spawn script")
 		return nil
 	end
+
 	local output, err = child:wait_with_output()
-	if err or not output.status.success then
-		ya.err("DuckDB error: " .. (err or output.stderr))
+	if err or not output or not output.status.success then
+		ya.err("DuckDB (via script) error: " .. (err or output.stderr or "[unknown error]"))
 		return nil
 	end
+
 	return output
 end
 
@@ -192,6 +203,7 @@ function M:peek(job)
 		end
 	end
 
+	ya.dbg("stdout:\n" .. output.stdout)
 	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 end
 
