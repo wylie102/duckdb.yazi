@@ -33,7 +33,7 @@ local function generate_sql(job, mode)
 				LEFT(max, 10) AS max,
 				CASE
 					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN avg IS NULL THEN 'NULL'
+					WHEN avg IS NULL THEN NULL
 					WHEN TRY_CAST(avg AS DOUBLE) IS NULL THEN avg
 					WHEN CAST(avg AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(avg AS DOUBLE), 2) AS VARCHAR)
 					WHEN CAST(avg AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(avg AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
@@ -43,7 +43,7 @@ local function generate_sql(job, mode)
 				END AS avg,
 				CASE
 					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN std IS NULL THEN 'NULL'
+					WHEN std IS NULL THEN NULL
 					WHEN TRY_CAST(std AS DOUBLE) IS NULL THEN std
 					WHEN CAST(std AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(std AS DOUBLE), 2) AS VARCHAR)
 					WHEN CAST(std AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(std AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
@@ -53,7 +53,7 @@ local function generate_sql(job, mode)
 				END AS std,
 				CASE
 					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN q25 IS NULL THEN 'NULL'
+					WHEN q25 IS NULL THEN NULL
 					WHEN TRY_CAST(q25 AS DOUBLE) IS NULL THEN q25
 					WHEN CAST(q25 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q25 AS DOUBLE), 2) AS VARCHAR)
 					WHEN CAST(q25 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q25 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
@@ -63,7 +63,7 @@ local function generate_sql(job, mode)
 				END AS q25,
 				CASE
 					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN q50 IS NULL THEN 'NULL'
+					WHEN q50 IS NULL THEN NULL
 					WHEN TRY_CAST(q50 AS DOUBLE) IS NULL THEN q50
 					WHEN CAST(q50 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q50 AS DOUBLE), 2) AS VARCHAR)
 					WHEN CAST(q50 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q50 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
@@ -73,7 +73,7 @@ local function generate_sql(job, mode)
 				END AS q50,
 				CASE
 					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN q75 IS NULL THEN 'NULL'
+					WHEN q75 IS NULL THEN NULL
 					WHEN TRY_CAST(q75 AS DOUBLE) IS NULL THEN q75
 					WHEN CAST(q75 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q75 AS DOUBLE), 2) AS VARCHAR)
 					WHEN CAST(q75 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q75 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
@@ -102,7 +102,7 @@ end
 local function run_query(job, query, target)
 	local db_path = (target ~= job.file.url) and tostring(target) or ""
 
-	local width = math.max((job.area and job.area.w * 2 or 80), 80)
+	local width = math.max((job.area and job.area.w * 10 or 80), 80)
 	local height = math.max((job.area and job.area.h or 25), 25)
 
 	local args = { "-q", "/dev/null", "duckdb" }
