@@ -17,75 +17,74 @@ function M:setup(opts)
 end
 
 -- Full summarized SQL
-local function generate_sql(job, mode)
+local function generate_preload_query(job, mode)
 	if mode == "standard" then
-		return string.format("SELECT * FROM '%s' LIMIT 500", tostring(job.file.url))
+		return string.format("FROM '%s' LIMIT 500", tostring(job.file.url))
 	else
-		return string.format(
-			[[
-			SELECT
-				column_name AS column,
-				column_type AS type,
-				count,
-				approx_unique AS unique,
-				null_percentage AS null,
-				LEFT(min, 10) AS min,
-				LEFT(max, 10) AS max,
-				CASE
-					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN avg IS NULL THEN NULL
-					WHEN TRY_CAST(avg AS DOUBLE) IS NULL THEN avg
-					WHEN CAST(avg AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(avg AS DOUBLE), 2) AS VARCHAR)
-					WHEN CAST(avg AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(avg AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
-					WHEN CAST(avg AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(avg AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
-					WHEN CAST(avg AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(avg AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
-					ELSE '∞'
-				END AS avg,
-				CASE
-					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN std IS NULL THEN NULL
-					WHEN TRY_CAST(std AS DOUBLE) IS NULL THEN std
-					WHEN CAST(std AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(std AS DOUBLE), 2) AS VARCHAR)
-					WHEN CAST(std AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(std AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
-					WHEN CAST(std AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(std AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
-					WHEN CAST(std AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(std AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
-					ELSE '∞'
-				END AS std,
-				CASE
-					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN q25 IS NULL THEN NULL
-					WHEN TRY_CAST(q25 AS DOUBLE) IS NULL THEN q25
-					WHEN CAST(q25 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q25 AS DOUBLE), 2) AS VARCHAR)
-					WHEN CAST(q25 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q25 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
-					WHEN CAST(q25 AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(q25 AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
-					WHEN CAST(q25 AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(q25 AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
-					ELSE '∞'
-				END AS q25,
-				CASE
-					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN q50 IS NULL THEN NULL
-					WHEN TRY_CAST(q50 AS DOUBLE) IS NULL THEN q50
-					WHEN CAST(q50 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q50 AS DOUBLE), 2) AS VARCHAR)
-					WHEN CAST(q50 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q50 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
-					WHEN CAST(q50 AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(q50 AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
-					WHEN CAST(q50 AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(q50 AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
-					ELSE '∞'
-				END AS q50,
-				CASE
-					WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
-					WHEN q75 IS NULL THEN NULL
-					WHEN TRY_CAST(q75 AS DOUBLE) IS NULL THEN q75
-					WHEN CAST(q75 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q75 AS DOUBLE), 2) AS VARCHAR)
-					WHEN CAST(q75 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q75 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
-					WHEN CAST(q75 AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(q75 AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
-					WHEN CAST(q75 AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(q75 AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
-					ELSE '∞'
-				END AS q75
-			FROM (summarize FROM '%s')]],
-			tostring(job.file.url)
-		)
+		return string.format("SELECT * FROM (SUMMARIZE FROM '%s')", tostring(job.file.url))
 	end
 end
+
+local format_summary_cte = [[
+SELECT
+	column_name AS column,
+	column_type AS type,
+	count,
+	approx_unique AS unique,
+	null_percentage AS null,
+	LEFT(min, 10) AS min,
+	LEFT(max, 10) AS max,
+	CASE
+		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
+		WHEN avg IS NULL THEN NULL
+		WHEN TRY_CAST(avg AS DOUBLE) IS NULL THEN avg
+		WHEN CAST(avg AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(avg AS DOUBLE), 2) AS VARCHAR)
+		WHEN CAST(avg AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(avg AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
+		WHEN CAST(avg AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(avg AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
+		WHEN CAST(avg AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(avg AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
+		ELSE '∞'
+	END AS avg,
+	CASE
+		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
+		WHEN std IS NULL THEN NULL
+		WHEN TRY_CAST(std AS DOUBLE) IS NULL THEN std
+		WHEN CAST(std AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(std AS DOUBLE), 2) AS VARCHAR)
+		WHEN CAST(std AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(std AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
+		WHEN CAST(std AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(std AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
+		WHEN CAST(std AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(std AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
+		ELSE '∞'
+	END AS std,
+	CASE
+		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
+		WHEN q25 IS NULL THEN NULL
+		WHEN TRY_CAST(q25 AS DOUBLE) IS NULL THEN q25
+		WHEN CAST(q25 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q25 AS DOUBLE), 2) AS VARCHAR)
+		WHEN CAST(q25 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q25 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
+		WHEN CAST(q25 AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(q25 AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
+		WHEN CAST(q25 AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(q25 AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
+		ELSE '∞'
+	END AS q25,
+	CASE
+		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
+		WHEN q50 IS NULL THEN NULL
+		WHEN TRY_CAST(q50 AS DOUBLE) IS NULL THEN q50
+		WHEN CAST(q50 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q50 AS DOUBLE), 2) AS VARCHAR)
+		WHEN CAST(q50 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q50 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
+		WHEN CAST(q50 AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(q50 AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
+		WHEN CAST(q50 AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(q50 AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
+		ELSE '∞'
+	END AS q50,
+	CASE
+		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
+		WHEN q75 IS NULL THEN NULL
+		WHEN TRY_CAST(q75 AS DOUBLE) IS NULL THEN q75
+		WHEN CAST(q75 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q75 AS DOUBLE), 2) AS VARCHAR)
+		WHEN CAST(q75 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q75 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
+		WHEN CAST(q75 AS DOUBLE) < 1000000000 THEN CAST(ROUND(CAST(q75 AS DOUBLE) / 1000000, 2) AS VARCHAR) || 'm'
+		WHEN CAST(q75 AS DOUBLE) < 1000000000000 THEN CAST(ROUND(CAST(q75 AS DOUBLE) / 1000000000, 2) AS VARCHAR) || 'b'
+		ELSE '∞'
+	END AS q75
+FROM %s]],
 
 -- Get preview cache path
 local function get_cache_path(job, mode)
@@ -99,7 +98,29 @@ local function get_cache_path(job, mode)
 	return Url(tostring(base) .. "_" .. mode .. ".db")
 end
 
+-- Run queries.
 local function run_query(job, query, target)
+	local args = {}
+	if target ~= job.file.url then
+		table.insert(args, tostring(target))
+	end
+	table.insert(args, "-c")
+	table.insert(args, query)
+	ya.dbg(query)
+	ya.dbg(target)
+	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+	if not child then
+		return nil
+	end
+	local output, err = child:wait_with_output()
+	if err or not output.status.success then
+		ya.err(err)
+		return nil
+	end
+	return output
+end
+
+local function run_query_ascii_preview_mac(job, query, target)
 	local db_path = (target ~= job.file.url) and tostring(target) or ""
 
 	local width = math.max((job.area and job.area.w * 10 or 80), 80)
@@ -140,18 +161,19 @@ local function create_cache(job, mode, path)
 	if fs.cha(path) then
 		return true
 	end
-	local sql = generate_sql(job, mode)
-	local out = run_query(job, string.format("CREATE TABLE My_table AS (%s);", sql), path)
+	local sql = generate_preload_query(job, mode)
+	ya.dbg(sql)
+	local out = run_query(job, string.format("CREATE TABLE My_table AS %s;", sql), path)
 	return out ~= nil
 end
 
-local function generate_query(target, job, limit, offset)
+-- TODO: finish peek query generation.
+local function generate_peek_query(target, job, limit, offset)
 	local mode = get_mode()
 	if target == job.file.url then
 		if mode == "standard" then
 			return string.format("SELECT * FROM '%s' LIMIT %d OFFSET %d;", tostring(target), limit, offset)
 		else
-			local query = generate_sql(job, mode)
 			return string.format("WITH query AS (%s) SELECT * FROM query LIMIT %d OFFSET %d;", query, limit, offset)
 		end
 	else
@@ -188,17 +210,17 @@ function M:peek(job)
 
 	local limit = job.area.h - 7
 	local offset = skip
-	local query = generate_query(target, job, limit, offset)
+	local query = generate_peek_query(target, job, limit, offset)
 
-	local output = run_query(job, query, target)
+	local output = run_query_ascii_preview_mac(job, query, target)
 
 	if not output or output.stdout == "" then
 		ya.dbg("Peek - No output from cache. Trying file directly.")
 
 		if target ~= file_url then
 			target = file_url
-			query = generate_query(target, job, limit, offset)
-			output = run_query(job, query, target)
+			query = generate_peek_query(target, job, limit, offset)
+			output = run_query_ascii_preview_mac(job, query, target)
 
 			if not output or output.stdout == "" then
 				ya.dbg("Peek - Fallback to file also failed. Showing default code preview.")
