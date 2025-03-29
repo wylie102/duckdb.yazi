@@ -102,8 +102,8 @@ end
 local function run_query(job, query, target)
 	local db_path = (target ~= job.file.url) and tostring(target) or ""
 
-	local width = math.max((job.area and job.area.w or 80), 80)
-	local height = math.max((job.area and job.area.h - 7 or 25), 25)
+	local width = math.max((job.area and job.area.w * 2 or 80), 80)
+	local height = math.max((job.area and job.area.h or 25), 25)
 
 	local args = { "-q", "/dev/null", "duckdb" }
 	if db_path ~= "" then
