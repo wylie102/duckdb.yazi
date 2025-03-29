@@ -101,15 +101,22 @@ end
 
 local function run_query(job, query, target)
 	local db_path = (target ~= job.file.url) and tostring(target) or ""
-	local escaped_query = query -- don't quote it — we’ll pass it as an arg
-	local args = { "-q", "/dev/null", "duckdb" }
 
+	local width = math.max((job.area and job.area.w or 80), 80)
+	local height = math.max((job.area and job.area.h - 7 or 25), 25)
+
+	local args = { "-q", "/dev/null", "duckdb" }
 	if db_path ~= "" then
 		table.insert(args, db_path)
 	end
 
+	-- Inject duckbox config via separate -c args before the main query
 	table.insert(args, "-c")
-	table.insert(args, escaped_query)
+	table.insert(args, string.format(".maxwidth %d", width))
+	table.insert(args, "-c")
+	table.insert(args, string.format(".maxrows %d", height))
+	table.insert(args, "-c")
+	table.insert(args, query)
 
 	ya.dbg("Running script with args: " .. table.concat(args, " "))
 
