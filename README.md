@@ -41,14 +41,14 @@ and add to your yazi.toml:
 
     [plugin]  
     prepend_previewers = [  
-      { mime = "text/csv", run = "duckdb" },  
+      { name = "*.csv", run = "duckdb" },  
       { name = "*.tsv", run = "duckdb" },  
       { name = "*.json", run = "duckdb" },  
       { name = "*.parquet", run = "duckdb" },  
     ]
 
     prepend_preloaders = [  
-      { mime = "text/csv", run = "duckdb", multi = false },  
+      { name = "*.csv", run = "duckdb", multi = false },  
       { name = "*.tsv", run = "duckdb", multi = false },  
       { name = "*.json", run = "duckdb", multi = false },  
       { name = "*.parquet", run = "duckdb", multi = false },  
