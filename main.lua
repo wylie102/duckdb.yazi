@@ -173,14 +173,27 @@ end
 
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_mode()
-	local table_ref = (target == job.file.url) and ("'" .. tostring(target) .. "'") or "My_table"
+	local is_file = (target == job.file.url)
 
 	if mode == "standard" then
-		return string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", table_ref, limit, offset)
-	else
-		local summary_cte = generate_summary_cte(table_ref)
 		return string.format(
-			"WITH summary_cte AS (%s) SELECT * FROM summary_cte LIMIT %d OFFSET %d;",
+			"SELECT * FROM %s LIMIT %d OFFSET %d;",
+			is_file and ("'" .. target .. "'") or "My_table",
+			limit,
+			offset
+		)
+	else
+		local summary_source = is_file and string.format("(summarize select * from '%s')", target) or "My_table"
+
+		local summary_cte = generate_summary_cte(summary_source)
+
+		return string.format(
+			[[
+WITH summary_cte AS (
+	%s
+)
+SELECT * FROM summary_cte LIMIT %d OFFSET %d;
+]],
 			summary_cte,
 			limit,
 			offset
@@ -205,7 +218,7 @@ end
 -- Preload summarized and standard preview caches
 function M:preload(job)
 	-- brief sleep to avoid blocking peek call when entering dir for first time.
-	-- ya.sleep(0.1)
+	ya.sleep(0.1)
 	for _, mode in ipairs({ "standard", "summarized" }) do
 		local path = get_cache_path(job, mode)
 		if path and not fs.cha(path) then
