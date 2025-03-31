@@ -25,15 +25,17 @@ local function generate_preload_query(job, mode)
 	end
 end
 
-local format_summary_cte = [[
+local function generate_summary_cte(target)
+	return string.format(
+		[[
 SELECT
 	column_name AS column,
 	column_type AS type,
 	count,
 	approx_unique AS unique,
 	null_percentage AS null,
-	LEFT(min, 10) AS min,
-	LEFT(max, 10) AS max,
+	LEFT(min, %d) AS min,
+	LEFT(max, %d) AS max,
 	CASE
 		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
 		WHEN avg IS NULL THEN NULL
@@ -85,6 +87,11 @@ SELECT
 		ELSE '∞'
 	END AS q75
 FROM %s]],
+		10,
+		10,
+		target
+	)
+end
 
 -- Get preview cache path
 local function get_cache_path(job, mode)
@@ -170,14 +177,18 @@ end
 -- TODO: finish peek query generation.
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_mode()
-	if target == job.file.url then
-		if mode == "standard" then
-			return string.format("SELECT * FROM '%s' LIMIT %d OFFSET %d;", tostring(target), limit, offset)
-		else
-			return string.format("WITH query AS (%s) SELECT * FROM query LIMIT %d OFFSET %d;", query, limit, offset)
-		end
+	local table_ref = (target == job.url) and ("'" .. tostring(target) .. "'") or "My_table"
+
+	if mode == "standard" then
+		return string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", table_ref, limit, offset)
 	else
-		return string.format("SELECT * FROM My_table LIMIT %d OFFSET %d;", limit, offset)
+		local summary_cte = generate_summary_cte(table_ref)
+		return string.format(
+			"WITH summary_cte AS (%s) SELECT * FROM summary_cte LIMIT %d OFFSET %d;",
+			summary_cte,
+			limit,
+			offset
+		)
 	end
 end
 
