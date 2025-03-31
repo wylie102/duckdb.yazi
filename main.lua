@@ -113,7 +113,6 @@ local function run_query(job, query, target)
 	table.insert(args, "-c")
 	table.insert(args, query)
 	ya.dbg(query)
-	ya.dbg(target)
 	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 	if not child then
 		return nil
@@ -168,14 +167,13 @@ local function create_cache(job, mode, path)
 		return true
 	end
 	local sql = generate_preload_query(job, mode)
-	ya.dbg(sql)
 	local out = run_query(job, string.format("CREATE TABLE My_table AS %s;", sql), path)
 	return out ~= nil
 end
 
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_mode()
-	local table_ref = (target == job.url) and ("'" .. tostring(target) .. "'") or "My_table"
+	local table_ref = (target == job.file.url) and ("'" .. tostring(target) .. "'") or "My_table"
 
 	if mode == "standard" then
 		return string.format("SELECT * FROM %s LIMIT %d OFFSET %d;", table_ref, limit, offset)
@@ -195,10 +193,9 @@ local function is_duckdb_error(output)
 		return true
 	end
 
-	local trimmed = output.stdout:match("^%s*(.-)$")
+	local head = output.stdout:sub(1, 256)
 
-	-- Does not start with U+2502 "│" — not duckbox table output
-	if not trimmed:find("^│") then
+	if head:match("\27%[1m\27%[31m[%w%s]+Error:") then
 		return true
 	end
 
@@ -207,11 +204,15 @@ end
 
 -- Preload summarized and standard preview caches
 function M:preload(job)
+	-- brief sleep to avoid blocking peek call when entering dir for first time.
+	-- ya.sleep(0.1)
 	for _, mode in ipairs({ "standard", "summarized" }) do
 		local path = get_cache_path(job, mode)
 		if path and not fs.cha(path) then
-			ya.dbg("Creating cache for mode: " .. mode)
+			local filename = job.file.url:name() or "[unknown]"
+			ya.dbg(string.format("Preload - Creating cache for mode: %s, file: %s", mode, filename))
 			create_cache(job, mode, path)
+			ya.dbg(string.format("Preload - Finished cache for mode: %s, file: %s", mode, filename))
 		end
 	end
 	return true
@@ -223,7 +224,7 @@ function M:peek(job)
 	local skip = math.max(0, raw_skip - 50)
 	job.skip = skip
 
-	ya.dbg(string.format("Peek - raw_skip: %d | adjusted skip: %d", raw_skip, skip))
+	ya.dbg(string.format("Peek - raw_skip: %d, adjusted skip: %d", raw_skip, skip))
 
 	local mode = get_mode()
 	ya.dbg("Peek - Mode from state: " .. mode)
@@ -236,6 +237,7 @@ function M:peek(job)
 	local offset = skip
 	local query = generate_peek_query(target, job, limit, offset)
 
+	ya.dbg(string.format("Peek - target: %s", target))
 	local output = run_query_ascii_preview_mac(job, query, target)
 
 	if not output or is_duckdb_error(output) then
@@ -249,6 +251,7 @@ function M:peek(job)
 			ya.dbg("Peek - Retrying directly from file.")
 			target = file_url
 			query = generate_peek_query(target, job, limit, offset)
+			-- update target before calling again
 			output = run_query_ascii_preview_mac(job, query, target)
 
 			if not output or is_duckdb_error(output) then
@@ -264,11 +267,11 @@ function M:peek(job)
 		end
 	end
 
-	ya.dbg("stdout:\n" .. output.stdout)
+	ya.dbg(string.format("Peek - result returned for: %s", file_url:name()))
 	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
 end
 
--- Seek with debug output
+-- Seek, also triggers mode change if skip negative.
 function M:seek(job)
 	local OFFSET_BASE = 50
 	local current_skip = math.max(0, cx.active.preview.skip - OFFSET_BASE)
