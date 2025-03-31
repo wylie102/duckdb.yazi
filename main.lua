@@ -9,14 +9,13 @@ local get_mode = ya.sync(function(state)
 	return state.mode or "summarized"
 end)
 
--- Setup from init.lua: require("duckdb"):setup({ mode = "standard" })
+-- Setup from init.lua: require("duckdb"):setup({ mode = "standard"/"summarized" })
 function M:setup(opts)
 	local default_mode = opts and opts.mode or "summarized"
 	set_mode(default_mode)
 	ya.dbg("Setup - Preview mode initialized to: " .. default_mode)
 end
 
--- Full summarized SQL
 local function generate_preload_query(job, mode)
 	if mode == "standard" then
 		return string.format("FROM '%s' LIMIT 500", tostring(job.file.url))
@@ -174,7 +173,6 @@ local function create_cache(job, mode, path)
 	return out ~= nil
 end
 
--- TODO: finish peek query generation.
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_mode()
 	local table_ref = (target == job.url) and ("'" .. tostring(target) .. "'") or "My_table"
@@ -190,6 +188,21 @@ local function generate_peek_query(target, job, limit, offset)
 			offset
 		)
 	end
+end
+
+local function is_duckdb_error(output)
+	if not output or not output.stdout then
+		return true
+	end
+
+	local trimmed = output.stdout:match("^%s*(.-)$")
+
+	-- Does not start with U+2502 "│" — not duckbox table output
+	if not trimmed:find("^│") then
+		return true
+	end
+
+	return false
 end
 
 -- Preload summarized and standard preview caches
@@ -225,20 +238,28 @@ function M:peek(job)
 
 	local output = run_query_ascii_preview_mac(job, query, target)
 
-	if not output or output.stdout == "" then
-		ya.dbg("Peek - No output from cache. Trying file directly.")
+	if not output or is_duckdb_error(output) then
+		if output and output.stdout then
+			ya.err("DuckDB returned an error or invalid output:\n" .. output.stdout)
+		else
+			ya.dbg("Peek - No output from cache.")
+		end
 
 		if target ~= file_url then
+			ya.dbg("Peek - Retrying directly from file.")
 			target = file_url
 			query = generate_peek_query(target, job, limit, offset)
 			output = run_query_ascii_preview_mac(job, query, target)
 
-			if not output or output.stdout == "" then
-				ya.dbg("Peek - Fallback to file also failed. Showing default code preview.")
+			if not output or is_duckdb_error(output) then
+				if output and output.stdout then
+					ya.err("Fallback DuckDB output:\n" .. output.stdout)
+				end
+				ya.dbg("Peek - Fallback also failed. Showing default code preview.")
 				return require("code"):peek(job)
 			end
 		else
-			ya.dbg("Peek - No output and target was already file. Showing default code preview.")
+			ya.dbg("Peek - No cache and direct file attempt failed. Showing default code preview.")
 			return require("code"):peek(job)
 		end
 	end
