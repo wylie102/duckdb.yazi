@@ -1,19 +1,39 @@
 -- DuckDB Plugin for Yazi
 local M = {}
 
-local set_mode = ya.sync(function(state, mode)
-	state.mode = mode
+-- TODO: csv ignore errors/alternate quotes
+-- TODO: db show tables
+-- TODO: xlsx support
+-- TODO: ensure errors are transmitted in the preload function
+-- TODO: render function fix for peek
+-- TODO: versioning for the cache
+-- TODO: check if seek/peek still need offset and set a "mode changed" toggle in opts
+
+local set_state = ya.sync(function(state, key, value)
+	state.opts = state.opts or {}
+	state.opts[key] = value
 end)
 
-local get_mode = ya.sync(function(state)
-	return state.mode or "summarized"
+local get_state = ya.sync(function(state, key)
+	state.opts = state.opts or {}
+	return state.opts[key]
 end)
 
 -- Setup from init.lua: require("duckdb"):setup({ mode = "standard"/"summarized" })
 function M:setup(opts)
-	local default_mode = opts and opts.mode or "summarized"
-	set_mode(default_mode)
-	ya.dbg("Setup - Preview mode initialized to: " .. default_mode)
+	opts = opts or {}
+
+	local mode = opts.mode or "summarized"
+	local os = ya.target_os()
+	local column_width = opts.minmax_column_width or 10
+
+	set_state("mode", mode)
+	set_state("os", os)
+	set_state("column_width", column_width)
+
+	ya.dbg("Setup - Preview mode initialized to: " .. mode)
+	ya.dbg("Setup - OS detected as: " .. os)
+	ya.dbg("Setup - Column width set to: " .. column_width)
 end
 
 local function generate_preload_query(job, mode)
@@ -25,6 +45,7 @@ local function generate_preload_query(job, mode)
 end
 
 local function generate_summary_cte(target)
+	column_width = get_state("column_width")
 	return string.format(
 		[[
 SELECT
@@ -87,8 +108,8 @@ SELECT
 	END AS q75
 FROM %s
 		]],
-		10,
-		10,
+		column_width,
+		column_width,
 		target
 	)
 end
@@ -173,7 +194,7 @@ local function create_cache(job, mode, path)
 end
 
 local function generate_peek_query(target, job, limit, offset)
-	local mode = get_mode()
+	local mode = get_state("mode")
 	local is_file = (target == job.file.url)
 
 	if mode == "standard" then
@@ -216,6 +237,16 @@ local function is_duckdb_error(output)
 	return false
 end
 
+local function os_run_peek_query(job, target, limit, offset)
+	local operating_system = get_state("os")
+	local query = generate_peek_query(target, job, limit, offset)
+	if operating_system == "macos" then
+		return run_query_ascii_preview_mac(job, query, target)
+	else
+		return run_query(job, query, target)
+	end
+end
+
 -- Preload summarized and standard preview caches
 function M:preload(job)
 	-- brief sleep to avoid blocking peek call when entering dir for first time.
@@ -240,7 +271,7 @@ function M:peek(job)
 
 	ya.dbg(string.format("Peek - raw_skip: %d, adjusted skip: %d", raw_skip, skip))
 
-	local mode = get_mode()
+	local mode = get_state("mode")
 	ya.dbg("Peek - Mode from state: " .. mode)
 
 	local cache = get_cache_path(job, mode)
@@ -249,11 +280,9 @@ function M:peek(job)
 
 	local limit = job.area.h - 7
 	local offset = skip
-	local query = generate_peek_query(target, job, limit, offset)
 
 	ya.dbg(string.format("Peek - target: %s", target))
-	local output = run_query_ascii_preview_mac(job, query, target)
-
+	local output = os_run_peek_query(job, target, limit, offset)
 	if not output or is_duckdb_error(output) then
 		if output and output.stdout then
 			ya.err("DuckDB returned an error or invalid output:\n" .. output.stdout)
@@ -264,10 +293,7 @@ function M:peek(job)
 		if target ~= file_url then
 			ya.dbg("Peek - Retrying directly from file.")
 			target = file_url
-			query = generate_peek_query(target, job, limit, offset)
-			-- update target before calling again
-			output = run_query_ascii_preview_mac(job, query, target)
-
+			output = os_run_peek_query(job, target, limit, offset)
 			if not output or is_duckdb_error(output) then
 				if output and output.stdout then
 					ya.err("Fallback DuckDB output:\n" .. output.stdout)
@@ -294,9 +320,9 @@ function M:seek(job)
 
 	if new_skip < 0 then
 		-- Toggle preview mode
-		local mode = get_mode()
+		local mode = get_state("mode")
 		local new_mode = (mode == "summarized") and "standard" or "summarized"
-		set_mode(new_mode)
+		set_state("mode", new_mode)
 		ya.dbg("Seek - Toggled mode to: " .. new_mode)
 
 		-- Trigger re-peek
