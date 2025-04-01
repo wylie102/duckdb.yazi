@@ -159,6 +159,11 @@ local function run_query_ascii_preview_mac(job, query, target)
 	if db_path ~= "" then
 		table.insert(args, db_path)
 	end
+	if
+		target == job.file.url and (tostring(job.file.url.name) == "*.db" or tostring(job.file.url.name == "*.duckdb"))
+	then
+		table.insert(args, tostring(target))
+	end
 
 	-- Inject duckbox config via separate -c args before the main query
 	table.insert(args, "-c")
@@ -202,6 +207,12 @@ local function generate_peek_query(target, job, limit, offset)
 	local row_id = get_state("row_id")
 	local is_file = (target == job.file.url)
 
+	if
+		target == job.file.url and (tostring(job.file.url.name) == "*.db" or tostring(job.file.url.name == "*.duckdb"))
+	then
+		ya.dbg("target is a database, getting tables.")
+		return "SELECT * FROM information_schema.tables;"
+	end
 	if mode == "standard" then
 		return string.format(
 			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
