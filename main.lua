@@ -5,8 +5,7 @@ local M = {}
 -- TODO: db show tables
 -- TODO: xlsx support
 -- TODO: ensure errors are transmitted in the preload function
--- TODO: check if seek/peek still need offset
--- TODO: row id for standard output and option to turn on or off.
+-- TODO: side scrolling using SELECT * EXCEPT(2) -> EXCEPT (2,3)
 
 local set_state = ya.sync(function(state, key, value)
 	state.opts = state.opts or {}
@@ -25,14 +24,17 @@ function M:setup(opts)
 	local mode = opts.mode or "summarized"
 	local os = ya.target_os()
 	local column_width = opts.minmax_column_width or 21
+	local row_id = opts.row_id or false
 
 	set_state("mode", mode)
 	set_state("os", os)
 	set_state("column_width", column_width)
+	set_state("row_id", row_id)
 
 	ya.dbg("Setup - Preview mode initialized to: " .. mode)
 	ya.dbg("Setup - OS detected as: " .. os)
 	ya.dbg("Setup - Column width set to: " .. column_width)
+	ya.dbg("Setup - Row ID set to: " .. tostring(row_id))
 end
 
 local function generate_preload_query(job, mode)
@@ -197,11 +199,13 @@ end
 
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_state("mode")
+	local row_id = get_state("row_id")
 	local is_file = (target == job.file.url)
 
 	if mode == "standard" then
 		return string.format(
-			"SELECT * FROM %s LIMIT %d OFFSET %d;",
+			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
+			row_id and "CAST(rowid as VARCHAR) as row_id, " or "",
 			is_file and ("'" .. target .. "'") or "My_table",
 			limit,
 			offset
@@ -251,12 +255,12 @@ end
 
 -- Preload summarized and standard preview caches
 function M:preload(job)
-	-- brief sleep to avoid blocking peek call when entering dir for first time.
-	ya.sleep(0.1)
 	for _, mode in ipairs({ "standard", "summarized" }) do
 		local path = get_cache_path(job, mode)
 		if path and not fs.cha(path) then
 			local filename = job.file.url:name() or "[unknown]"
+			-- brief sleep to avoid blocking peek call when entering dir for first time.
+			ya.sleep(0.1)
 			ya.dbg(string.format("Preload - Creating cache for mode: %s, file: %s", mode, filename))
 			create_cache(job, mode, path)
 			ya.dbg(string.format("Preload - Finished cache for mode: %s, file: %s", mode, filename))
