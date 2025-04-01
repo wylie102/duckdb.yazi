@@ -214,16 +214,27 @@ local function generate_peek_query(target, job, limit, offset)
 	local name = job.file.url:name() or ""
 	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
 		ya.dbg("target is a database, getting tables.")
-		return [[select
-  distinct t.table_name,
-  t.has_primary_key,
-  t.estimated_size,
-  t.column_count,
-  t.index_count,
-  string_agg(c.column_name, ', ') over (partition by t.table_name) as columns
-from duckdb_tables() t
-left join duckdb_columns() c
-  on t.table_name = c.table_name;]]
+		return string.format(
+			[[
+WITH table_info AS (
+  SELECT
+    DISTINCT t.table_name,
+    t.has_primary_key,
+    t.estimated_size,
+    t.column_count,
+    t.index_count,
+    STRING_AGG(c.column_name, ', ' ORDER BY c.column_index) OVER (PARTITION BY t.table_name) AS columns
+  FROM duckdb_tables() t
+  LEFT JOIN duckdb_columns() c
+    ON t.table_name = c.table_name
+  ORDER BY t.table_name
+)
+SELECT * FROM table_info
+LIMIT %d OFFSET %d;
+]],
+			limit,
+			offset
+		)
 	end
 	if mode == "standard" then
 		return string.format(
