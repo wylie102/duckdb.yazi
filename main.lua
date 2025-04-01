@@ -6,7 +6,6 @@ local M = {}
 -- TODO: xlsx support
 -- TODO: ensure errors are transmitted in the preload function
 -- TODO: check if seek/peek still need offset
--- TODO: turn loader bars off.
 -- TODO: row id for standard output and option to turn on or off.
 
 local set_state = ya.sync(function(state, key, value)
@@ -160,6 +159,8 @@ local function run_query_ascii_preview_mac(job, query, target)
 	end
 
 	-- Inject duckbox config via separate -c args before the main query
+	table.insert(args, "-c")
+	table.insert(args, "SET enable_progress_bar = false;")
 	table.insert(args, "-c")
 	table.insert(args, string.format(".maxwidth %d", width))
 	table.insert(args, "-c")
