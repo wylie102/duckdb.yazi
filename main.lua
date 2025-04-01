@@ -2,7 +2,6 @@
 local M = {}
 
 -- TODO: csv ignore errors/alternate quotes
--- TODO: db show tables
 -- TODO: xlsx support
 -- TODO: ensure errors are transmitted in the preload function
 -- TODO: side scrolling using SELECT * EXCEPT(2) -> EXCEPT (2,3)
@@ -134,6 +133,11 @@ local function run_query(job, query, target)
 	if target ~= job.file.url then
 		table.insert(args, tostring(target))
 	end
+	local name = job.file.url:name() or ""
+	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+		table.insert(args, "-readonly")
+		table.insert(args, tostring(target))
+	end
 	table.insert(args, "-c")
 	table.insert(args, query)
 	ya.dbg(query)
@@ -158,6 +162,11 @@ local function run_query_ascii_preview_mac(job, query, target)
 	local args = { "-q", "/dev/null", "duckdb" }
 	if db_path ~= "" then
 		table.insert(args, db_path)
+	end
+	local name = job.file.url:name() or ""
+	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+		table.insert(args, "-readonly")
+		table.insert(args, tostring(target))
 	end
 
 	-- Inject duckbox config via separate -c args before the main query
@@ -202,6 +211,21 @@ local function generate_peek_query(target, job, limit, offset)
 	local row_id = get_state("row_id")
 	local is_file = (target == job.file.url)
 
+	local name = job.file.url:name() or ""
+	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+		ya.dbg("target is a database, getting tables.")
+		return [[select
+  distinct t.table_name,
+  t.has_primary_key,
+  t.estimated_size,
+  t.column_count,
+  t.index_count,
+  string_agg(c.column_name, ', ') over (partition by t.table_name) as columns
+from duckdb_tables() t
+left join duckdb_columns() c
+  on t.table_name = c.table_name
+  order by t.table_name;]]
+	end
 	if mode == "standard" then
 		return string.format(
 			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
