@@ -211,7 +211,16 @@ local function generate_peek_query(target, job, limit, offset)
 		target == job.file.url and (tostring(job.file.url.name) == "*.db" or tostring(job.file.url.name == "*.duckdb"))
 	then
 		ya.dbg("target is a database, getting tables.")
-		return "SELECT * FROM information_schema.tables;"
+		return [[select
+  distinct t.table_name,
+  t.has_primary_key,
+  t.estimated_size,
+  t.column_count,
+  t.index_count,
+  string_agg(c.column_name, ', ') over (partition by t.table_name) as columns
+from duckdb_tables() t
+left join duckdb_columns() c
+  on t.table_name = c.table_name;]]
 	end
 	if mode == "standard" then
 		return string.format(
