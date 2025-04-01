@@ -5,10 +5,9 @@ local M = {}
 -- TODO: db show tables
 -- TODO: xlsx support
 -- TODO: ensure errors are transmitted in the preload function
--- TODO: render function fix for peek
--- TODO: versioning for the cache
--- TODO: check if seek/peek still need offset and set a "mode changed" toggle in opts
+-- TODO: check if seek/peek still need offset
 -- TODO: turn loader bars off.
+-- TODO: row id for standard output and option to turn on or off.
 
 local set_state = ya.sync(function(state, key, value)
 	state.opts = state.opts or {}
@@ -117,8 +116,9 @@ end
 
 -- Get preview cache path
 local function get_cache_path(job, mode)
+	local cache_version = 1
 	local skip = job.skip
-	job.skip = 0
+	job.skip = 1000000 + cache_version
 	local base = ya.file_cache(job)
 	job.skip = skip
 	if not base then
