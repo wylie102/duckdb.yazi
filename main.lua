@@ -8,6 +8,7 @@ local M = {}
 -- TODO: render function fix for peek
 -- TODO: versioning for the cache
 -- TODO: check if seek/peek still need offset and set a "mode changed" toggle in opts
+-- TODO: turn loader bars off.
 
 local set_state = ya.sync(function(state, key, value)
 	state.opts = state.opts or {}
@@ -308,7 +309,7 @@ function M:peek(job)
 	end
 
 	ya.dbg(string.format("Peek - result returned for: %s", file_url:name()))
-	ya.preview_widgets(job, { ui.Text.parse(output.stdout):area(job.area) })
+	ya.preview_widgets(job, { ui.Text.parse(output.stdout:sub(5):gsub("\r", "")):area(job.area) })
 end
 
 -- Seek, also triggers mode change if skip negative.
