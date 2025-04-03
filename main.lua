@@ -6,6 +6,37 @@ local M = {}
 -- TODO: ensure errors are transmitted in the preload function
 -- TODO: side scrolling using SELECT * EXCEPT(2) -> EXCEPT (2,3)
 
+local function log_timing(file, mode, label, duration)
+	local home = os.getenv("HOME") or "/tmp"
+	local log_path = "/Users/wylie/Desktop/Projects/duckdb.yazi_timings/duckdb-timings-db.csv"
+	local exists = fs.cha(Url(log_path))
+
+	local row = string.format("%s,%s,%s,%.6f\n", file, mode, label, duration)
+	local f = io.open(log_path, "a")
+
+	if f then
+		if not exists then
+			f:write("file,mode,label,duration\n")
+		end
+		f:write(row)
+		f:close()
+	else
+		ya.err("Could not write to timing log at: " .. log_path)
+	end
+end
+
+local function time_and_log(job, mode, label, func)
+	local start_time = ya.time()
+	local result = func()
+	local duration = ya.time() - start_time
+
+	local filename = job.file.url:name() or "[unknown]"
+	log_timing(filename, mode, label, duration)
+	ya.dbg(string.format("Timing - %s (%s): %.6f seconds", label, mode, duration))
+
+	return result
+end
+
 local set_state = ya.sync(function(state, key, value)
 	state.opts = state.opts or {}
 	state.opts[key] = value
@@ -156,7 +187,7 @@ end
 local function run_query_ascii_preview_mac(job, query, target)
 	local db_path = (target ~= job.file.url) and tostring(target) or ""
 
-	local width = math.max((job.area and job.area.w * 10 or 80), 80)
+	local width = math.max((job.area and job.area.w * 3 or 80), 80)
 	local height = math.max((job.area and job.area.h or 25), 25)
 
 	local args = { "-q", "/dev/null", "duckdb" }
@@ -201,9 +232,12 @@ local function create_cache(job, mode, path)
 	if fs.cha(path) then
 		return true
 	end
-	local sql = generate_preload_query(job, mode)
-	local out = run_query(job, string.format("CREATE TABLE My_table AS %s;", sql), path)
-	return out ~= nil
+
+	return time_and_log(job, mode, "create_cache", function()
+		local sql = generate_preload_query(job, mode)
+		local out = run_query(job, string.format("CREATE TABLE My_table AS %s;", sql), path)
+		return out ~= nil
+	end)
 end
 
 local function generate_peek_query(target, job, limit, offset)
@@ -322,7 +356,9 @@ function M:peek(job)
 	local offset = skip
 
 	ya.dbg(string.format("Peek - target: %s", target))
-	local output = os_run_peek_query(job, target, limit, offset)
+	local output = time_and_log(job, mode, "peek_query", function()
+		return os_run_peek_query(job, target, limit, offset)
+	end)
 	if not output or is_duckdb_error(output) then
 		if output and output.stdout then
 			ya.err("DuckDB returned an error or invalid output:\n" .. output.stdout)
