@@ -123,7 +123,7 @@ local function is_duckdb_database(path)
 end
 
 -- Run queries.
-local function run_query(job, query, target)
+local function run_query(query, target)
 	local args = {}
 	if is_duckdb_database(target) then
 		table.insert(args, "-readonly")
@@ -185,8 +185,7 @@ local function create_cache(job, mode, path)
 	end
 
 	local sql = generate_preload_query(job, mode)
-	local out =
-		run_query(job, string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
+	local out = run_query(string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
 	return out ~= nil
 end
 
@@ -222,9 +221,7 @@ LIMIT %d OFFSET %d;
 	end
 
 	local source = "'" .. tostring(target) .. "'"
-
 	if mode == "standard" then
-		-- Standard mode: read raw rows from source
 		return string.format(
 			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
 			row_id and "CAST(rowid as VARCHAR) as row_id, " or "",
@@ -233,13 +230,8 @@ LIMIT %d OFFSET %d;
 			offset
 		)
 	else
-		-- Summarized mode:
-		-- - If viewing the original file, run `summarize`
-		-- - If viewing a cache (target ≠ job.file.url), it’s already summarized
-		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source -- already summarized
-
+		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source
 		local summary_cte = generate_summary_cte(summary_source)
-
 		return string.format(
 			[[
 WITH summary_cte AS (
@@ -274,7 +266,7 @@ local function os_run_peek_query(job, target, limit, offset)
 	if operating_system == "macos" then
 		return run_query_ascii_preview_mac(job, query, target)
 	else
-		return run_query(job, query, target)
+		return run_query(query, target)
 	end
 end
 
