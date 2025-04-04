@@ -106,7 +106,7 @@ end
 
 -- Get preview cache path
 local function get_cache_path(job, mode)
-	local cache_version = 1
+	local cache_version = 2
 	local skip = job.skip
 	job.skip = 1000000 + cache_version
 	local base = ya.file_cache(job)
@@ -114,17 +114,18 @@ local function get_cache_path(job, mode)
 	if not base then
 		return nil
 	end
-	return Url(tostring(base) .. "_" .. mode .. ".db")
+	return Url(tostring(base) .. "_" .. mode .. ".parquet")
+end
+
+local function is_duckdb_database(path)
+	local name = path:name() or ""
+	return name:match("%.duckdb$") or name:match("%.db$")
 end
 
 -- Run queries.
-local function run_query(job, query, target)
+local function run_query(query, target)
 	local args = {}
-	if target ~= job.file.url then
-		table.insert(args, tostring(target))
-	end
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+	if is_duckdb_database(target) then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
@@ -143,17 +144,11 @@ local function run_query(job, query, target)
 end
 
 local function run_query_ascii_preview_mac(job, query, target)
-	local db_path = (target ~= job.file.url) and tostring(target) or ""
-
-	local width = math.max((job.area and job.area.w * 10 or 80), 80)
+	local width = math.max((job.area and job.area.w * 3 or 80), 80)
 	local height = math.max((job.area and job.area.h or 25), 25)
 
 	local args = { "-q", "/dev/null", "duckdb" }
-	if db_path ~= "" then
-		table.insert(args, db_path)
-	end
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+	if is_duckdb_database(target) then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
@@ -188,18 +183,20 @@ local function create_cache(job, mode, path)
 	if fs.cha(path) then
 		return true
 	end
+
 	local sql = generate_preload_query(job, mode)
-	local out = run_query(job, string.format("CREATE TABLE My_table AS %s;", sql), path)
+	local out = run_query(string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
 	return out ~= nil
 end
 
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_state("mode")
 	local row_id = get_state("row_id")
-	local is_file = (target == job.file.url)
+	local is_original_file = (target == job.file.url)
 
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+	-- If the file itself is a DuckDB database, list tables/columns
+	if is_original_file and is_duckdb_database(job.file.url) then
+		ya.dbg("generate_peek_query: target is a database, returning schema listing.")
 		return string.format(
 			[[
 WITH table_info AS (
@@ -222,19 +219,19 @@ LIMIT %d OFFSET %d;
 			offset
 		)
 	end
+
+	local source = "'" .. tostring(target) .. "'"
 	if mode == "standard" then
 		return string.format(
 			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
 			row_id and "CAST(rowid as VARCHAR) as row_id, " or "",
-			is_file and ("'" .. target .. "'") or "My_table",
+			source,
 			limit,
 			offset
 		)
 	else
-		local summary_source = is_file and string.format("(summarize select * from '%s')", target) or "My_table"
-
+		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source
 		local summary_cte = generate_summary_cte(summary_source)
-
 		return string.format(
 			[[
 WITH summary_cte AS (
@@ -269,7 +266,7 @@ local function os_run_peek_query(job, target, limit, offset)
 	if operating_system == "macos" then
 		return run_query_ascii_preview_mac(job, query, target)
 	else
-		return run_query(job, query, target)
+		return run_query(query, target)
 	end
 end
 

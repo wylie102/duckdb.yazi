@@ -35,6 +35,11 @@ Supported file types:
 
 First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and maintaining yazi, and for helping me fix a particularly annoying bug in this release.
 
+<br>
+
+>**Very latest** - If you want info on the latest (cache related changes) then see [here](https://github.com/wylie102/duckdb.yazi?tab=readme-ov-file#setup-and-usage-changes-from-previous-versions). Otherwise keep reading new features and config options below.
+<br>
+
 ### Output Syntax Highlighting
 
 - Passes through the colors from the duckdb output as you would see if using directly in the terminal.
@@ -43,13 +48,19 @@ First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and m
   - Planned for linux and Windows but need testers.
   - Please support my [feature request](https://github.com/duckdb/duckdb/discussions/16885) with duckdb which will prevent the need for os specific versions and make implementation easier and more reliable.
 
+<br>
+
 **Syntax highlighting with duckdb's default color scheme.**
 <img width="700" alt="Screenshot 2025-04-02 at 14 53 38" src="https://github.com/user-attachments/assets/d2267298-b91b-496c-ae74-1d432b826f6f" />
+
+<br>
 
 **Syntax highlighting with customized color scheme.**
 <img width="700" alt="Screenshot 2025-04-02 at 14 44 08" src="https://github.com/user-attachments/assets/965a0a4e-e4ed-4d88-ab95-84cd543f2a58" />
 
-### Preview DuckDC Databases
+<br>
+
+### Preview DuckDB Databases
 
 - If you open a `.db` or `.duckdb` file directly, the plugin lists all tables in the database.
 - Each entry includes:
@@ -61,13 +72,19 @@ First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and m
   - All column names (aggregated and in index order)
 - Tables are **alphabetically ordered** and paginated for smooth scrolling.
 - Reads directly from the db in read only mode for file safety.
+
+<br>
   
 <img width="700" alt="Screenshot 2025-04-02 at 14 46 19" src="https://github.com/user-attachments/assets/c640d6f3-d9f6-4d98-acd8-9e4c87c6e728" />
+
+<br>
 
 ### More customisation options - row_id (row number) and width of the min/max columns
 
 - Row id - in standard view to help keep track when scrolling, Default is off, but can be turned on in `init.lua` options.
 - Width of min and max columns. Default is now 21 twice as wide as previously. Is now customisable in the `init.lua`, the unit is the number of characters shown.
+
+<br>
 
 <img width="700" alt="Screenshot 2025-04-02 at 14 49 26" src="https://github.com/user-attachments/assets/6c8fb1ae-3de8-41ce-9c90-0279dc3b5e61" />
 
@@ -206,6 +223,14 @@ More information [here](https://duckdb.org/docs/stable/clients/cli/dot_commands#
 
 ## Setup and usage changes from previous versions
 
+### A Note on the Latest update
+The caches are now stored as parquet files, previously they were mini duckdb databases because the duckdb documentation suggested better performance with similar file size to parquet. However, there seemt to be a minimum file size of ~500kb regardless of the amount of data stored. While that isn't huge, it could add up.
+
+So I did some tests and using parquet files we get file sizes of ~5kb for the summarized view and usually 70-130kb for standard view. So about 1/10th the size for both views. Load speeds were similar (or slightly faster) using parquet, for both caching and viewing operations.
+
+So we've moved to parquet. I have cache versioning implemented, so yazi will automatically switch to using the latest version. But won't delete the old cache files. These are temp files and will usually be deleted on reboot, but if you like you can clear the whole cache using `yazi --clear-cache`.
+
+### Original version
 Previously, preview mode was selected by setting an environment variable (`DUCKDB_PREVIEW_MODE`).
 
 The new version no longer uses environment variables. Toggle preview modes directly within yazi using the keybinding described in the New Features section.
