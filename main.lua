@@ -114,7 +114,7 @@ local function get_cache_path(job, mode)
 	if not base then
 		return nil
 	end
-	return Url(tostring(base) .. "_" .. mode .. ".db")
+	return Url(tostring(base) .. "_" .. mode .. ".parquet")
 end
 
 -- Run queries.
@@ -145,7 +145,7 @@ end
 local function run_query_ascii_preview_mac(job, query, target)
 	local db_path = (target ~= job.file.url) and tostring(target) or ""
 
-	local width = math.max((job.area and job.area.w * 10 or 80), 80)
+	local width = math.max((job.area and job.area.w * 3 or 80), 80)
 	local height = math.max((job.area and job.area.h or 25), 25)
 
 	local args = { "-q", "/dev/null", "duckdb" }
@@ -188,18 +188,23 @@ local function create_cache(job, mode, path)
 	if fs.cha(path) then
 		return true
 	end
+
 	local sql = generate_preload_query(job, mode)
-	local out = run_query(job, string.format("CREATE TABLE My_table AS %s;", sql), path)
+	local out =
+		run_query(job, string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
 	return out ~= nil
+end
+
+local function is_duckdb_database(path)
+	local name = path:name() or ""
+	return name:match("%.duckdb$") or name:match("%.db$")
 end
 
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_state("mode")
 	local row_id = get_state("row_id")
-	local is_file = (target == job.file.url)
 
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+	if target == job.file.url and is_duckdb_database(job.file.url) then
 		return string.format(
 			[[
 WITH table_info AS (
@@ -222,17 +227,19 @@ LIMIT %d OFFSET %d;
 			offset
 		)
 	end
+
+	local source = "'" .. tostring(target) .. "'"
+
 	if mode == "standard" then
 		return string.format(
 			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
 			row_id and "CAST(rowid as VARCHAR) as row_id, " or "",
-			is_file and ("'" .. target .. "'") or "My_table",
+			source,
 			limit,
 			offset
 		)
 	else
-		local summary_source = is_file and string.format("(summarize select * from '%s')", target) or "My_table"
-
+		local summary_source = string.format("(summarize select * from %s)", source)
 		local summary_cte = generate_summary_cte(summary_source)
 
 		return string.format(
