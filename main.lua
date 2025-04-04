@@ -8,7 +8,7 @@ local M = {}
 
 local function log_timing(file, mode, label, duration)
 	local home = os.getenv("HOME") or "/tmp"
-	local log_path = "/Users/wylie/Desktop/Projects/duckdb.yazi_timings/duckdb-timings-db.csv"
+	local log_path = "/Users/wylie/Desktop/Projects/duckdb.yazi_timings/duckdb-timings-parquet.csv"
 	local exists = fs.cha(Url(log_path))
 
 	local row = string.format("%s,%s,%s,%.6f\n", file, mode, label, duration)
@@ -147,7 +147,7 @@ end
 
 -- Get preview cache path
 local function get_cache_path(job, mode)
-	local cache_version = 1
+	local cache_version = 2
 	local skip = job.skip
 	job.skip = 1000000 + cache_version
 	local base = ya.file_cache(job)
@@ -155,23 +155,25 @@ local function get_cache_path(job, mode)
 	if not base then
 		return nil
 	end
-	return Url(tostring(base) .. "_" .. mode .. ".db")
+	return Url(tostring(base) .. "_" .. mode .. ".parquet")
+end
+
+local function is_duckdb_database(path)
+	local name = path:name() or ""
+	return name:match("%.duckdb$") or name:match("%.db$")
 end
 
 -- Run queries.
 local function run_query(job, query, target)
 	local args = {}
-	if target ~= job.file.url then
-		table.insert(args, tostring(target))
-	end
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+	if is_duckdb_database(target) then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
 	table.insert(args, "-c")
 	table.insert(args, query)
 	ya.dbg(query)
+	ya.dbg("run_query writing to: " .. tostring(target))
 	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 	if not child then
 		return nil
@@ -185,17 +187,11 @@ local function run_query(job, query, target)
 end
 
 local function run_query_ascii_preview_mac(job, query, target)
-	local db_path = (target ~= job.file.url) and tostring(target) or ""
-
 	local width = math.max((job.area and job.area.w * 3 or 80), 80)
 	local height = math.max((job.area and job.area.h or 25), 25)
 
 	local args = { "-q", "/dev/null", "duckdb" }
-	if db_path ~= "" then
-		table.insert(args, db_path)
-	end
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+	if is_duckdb_database(target) then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
@@ -235,7 +231,9 @@ local function create_cache(job, mode, path)
 
 	return time_and_log(job, mode, "create_cache", function()
 		local sql = generate_preload_query(job, mode)
-		local out = run_query(job, string.format("CREATE TABLE My_table AS %s;", sql), path)
+		ya.dbg(string.format("create_cache: expected output path = %s", tostring(path)))
+		local out =
+			run_query(job, string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
 		return out ~= nil
 	end)
 end
@@ -243,11 +241,11 @@ end
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_state("mode")
 	local row_id = get_state("row_id")
-	local is_file = (target == job.file.url)
+	local is_original_file = (target == job.file.url)
 
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
-		ya.dbg("target is a database, getting tables.")
+	-- If the file itself is a DuckDB database, list tables/columns
+	if is_original_file and is_duckdb_database(job.file.url) then
+		ya.dbg("generate_peek_query: target is a database, returning schema listing.")
 		return string.format(
 			[[
 WITH table_info AS (
@@ -270,16 +268,23 @@ LIMIT %d OFFSET %d;
 			offset
 		)
 	end
+
+	local source = "'" .. tostring(target) .. "'"
+
 	if mode == "standard" then
+		-- Standard mode: read raw rows from source
 		return string.format(
 			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
 			row_id and "CAST(rowid as VARCHAR) as row_id, " or "",
-			is_file and ("'" .. target .. "'") or "My_table",
+			source,
 			limit,
 			offset
 		)
 	else
-		local summary_source = is_file and string.format("(summarize select * from '%s')", target) or "My_table"
+		-- Summarized mode:
+		-- - If viewing the original file, run `summarize`
+		-- - If viewing a cache (target ≠ job.file.url), it’s already summarized
+		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source -- already summarized
 
 		local summary_cte = generate_summary_cte(summary_source)
 
