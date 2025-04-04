@@ -147,7 +147,7 @@ end
 
 -- Get preview cache path
 local function get_cache_path(job, mode)
-	local cache_version = 1
+	local cache_version = 2
 	local skip = job.skip
 	job.skip = 1000000 + cache_version
 	local base = ya.file_cache(job)
