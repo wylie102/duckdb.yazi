@@ -117,14 +117,15 @@ local function get_cache_path(job, mode)
 	return Url(tostring(base) .. "_" .. mode .. ".parquet")
 end
 
+local function is_duckdb_database(path)
+	local name = path:name() or ""
+	return name:match("%.duckdb$") or name:match("%.db$")
+end
+
 -- Run queries.
 local function run_query(job, query, target)
 	local args = {}
-	if target ~= job.file.url then
-		table.insert(args, tostring(target))
-	end
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+	if is_duckdb_database(target) then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
@@ -143,17 +144,11 @@ local function run_query(job, query, target)
 end
 
 local function run_query_ascii_preview_mac(job, query, target)
-	local db_path = (target ~= job.file.url) and tostring(target) or ""
-
 	local width = math.max((job.area and job.area.w * 3 or 80), 80)
 	local height = math.max((job.area and job.area.h or 25), 25)
 
 	local args = { "-q", "/dev/null", "duckdb" }
-	if db_path ~= "" then
-		table.insert(args, db_path)
-	end
-	local name = job.file.url:name() or ""
-	if target == job.file.url and (name:match("%.db$") or name:match("%.duckdb$")) then
+	if is_duckdb_database(target) then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
@@ -193,11 +188,6 @@ local function create_cache(job, mode, path)
 	local out =
 		run_query(job, string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
 	return out ~= nil
-end
-
-local function is_duckdb_database(path)
-	local name = path:name() or ""
-	return name:match("%.duckdb$") or name:match("%.db$")
 end
 
 local function generate_peek_query(target, job, limit, offset)
