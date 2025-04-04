@@ -193,8 +193,11 @@ end
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_state("mode")
 	local row_id = get_state("row_id")
+	local is_original_file = (target == job.file.url)
 
-	if target == job.file.url and is_duckdb_database(job.file.url) then
+	-- If the file itself is a DuckDB database, list tables/columns
+	if is_original_file and is_duckdb_database(job.file.url) then
+		ya.dbg("generate_peek_query: target is a database, returning schema listing.")
 		return string.format(
 			[[
 WITH table_info AS (
@@ -221,6 +224,7 @@ LIMIT %d OFFSET %d;
 	local source = "'" .. tostring(target) .. "'"
 
 	if mode == "standard" then
+		-- Standard mode: read raw rows from source
 		return string.format(
 			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
 			row_id and "CAST(rowid as VARCHAR) as row_id, " or "",
@@ -229,7 +233,11 @@ LIMIT %d OFFSET %d;
 			offset
 		)
 	else
-		local summary_source = string.format("(summarize select * from %s)", source)
+		-- Summarized mode:
+		-- - If viewing the original file, run `summarize`
+		-- - If viewing a cache (target ≠ job.file.url), it’s already summarized
+		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source -- already summarized
+
 		local summary_cte = generate_summary_cte(summary_source)
 
 		return string.format(
