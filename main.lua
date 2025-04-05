@@ -11,6 +11,31 @@ local get_state = ya.sync(function(state, key)
 	return state.opts[key]
 end)
 
+function M:entry(job)
+	ya.dbg("entry triggered")
+	ya.dbg(job)
+	ya.dbg("job.args[1] = " .. tostring(job.args and job.args[1]))
+
+	local scroll_delta = tonumber(job.args and job.args[1])
+	ya.dbg("scroll_delta = " .. tostring(scroll_delta))
+
+	if not scroll_delta then
+		ya.dbg("DuckDB column scroll entry: Invalid or missing scroll delta; exiting.")
+		return
+	end
+
+	local scrolled_columns = get_state(state, "scrolled_columns") or 0
+
+	scrolled_columns = math.max(0, scrolled_columns + scroll_delta)
+	ya.dbg("scrolled_columns = " .. scrolled_columns)
+
+	set_state("scrolled_columns", scrolled_columns)
+	ya.dbg("state set")
+
+	ya.manager_emit("seek", { "lateral scroll" })
+	ya.dbg("seek emitted")
+end
+
 -- Setup from init.lua: require("duckdb"):setup({ mode = "standard"/"summarized" })
 function M:setup(opts)
 	opts = opts or {}
@@ -24,6 +49,7 @@ function M:setup(opts)
 	set_state("os", os)
 	set_state("column_width", column_width)
 	set_state("row_id", row_id)
+	set_state("scrolled_columns", 0)
 end
 
 local function generate_preload_query(job, mode)
@@ -285,11 +311,17 @@ end
 
 -- Peek with mode toggle if scrolling at top
 function M:peek(job)
+	ya.dbg("peek triggered")
 	local raw_skip = job.skip or 0
+	if raw_skip == 0 then
+		set_state("collumns_scrolled", 0)
+	end
 	local skip = math.max(0, raw_skip - 50)
 	job.skip = skip
 
 	local mode = get_state("mode")
+	local scrolled_collumns = get_state("scrolled_columns")
+	ya.dbg(scrolled_collumns)
 
 	local cache = get_cache_path(job, mode)
 	local file_url = job.file.url
@@ -325,7 +357,10 @@ function M:peek(job)
 end
 
 -- Seek, also triggers mode change if skip negative.
-function M:seek(job)
+function M:seek(job, args)
+	ya.dbg("seek triggered")
+	ya.dbg(job)
+	ya.dbg(args)
 	local OFFSET_BASE = 50
 	local current_skip = math.max(0, cx.active.preview.skip - OFFSET_BASE)
 	local units = job.units or 0
