@@ -24,7 +24,7 @@ function M:entry(job)
 		return
 	end
 
-	local scrolled_columns = get_state(state, "scrolled_columns") or 0
+	local scrolled_columns = get_state("scrolled_columns") or 0
 
 	scrolled_columns = math.max(0, scrolled_columns + scroll_delta)
 	ya.dbg("scrolled_columns = " .. scrolled_columns)
@@ -186,11 +186,18 @@ local function run_query_ascii_preview_mac(job, query, target)
 	table.insert(args, string.format(".maxwidth %d", width))
 	table.insert(args, "-c")
 	table.insert(args, string.format(".maxrows %d", height))
-	table.insert(args, "-c")
-	table.insert(args, query)
+
+	-- Add the actual query (can be string or list of -c args)
+	if type(query) == "table" then
+		for _, item in ipairs(query) do
+			table.insert(args, item)
+		end
+	else
+		table.insert(args, "-c")
+		table.insert(args, query)
+	end
 
 	local child = Command("script"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
-
 	if not child then
 		ya.err("Failed to spawn script")
 		return nil
@@ -213,6 +220,47 @@ local function create_cache(job, mode, path)
 	local sql = generate_preload_query(job, mode)
 	local out = run_query(string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
 	return out ~= nil
+end
+
+local function generate_lateral_scroll_query(target, limit, offset)
+	local scroll = get_state("scrolled_columns") or 0
+	local args = {}
+
+	if scroll > 0 then
+		local excluded_column_cte = string.format(
+			[[
+set variable excluded_columns = (
+	with column_list as (
+		select column_name, row_number() over () as row
+		from (describe select * from %s)
+	)
+	select list(column_name)
+	from column_list
+	where row <= %d
+);
+]],
+			target,
+			scroll
+		)
+
+		local filtered_select = string.format(
+			"select columns(c -> not list_contains(getvariable('excluded_columns'), c)) from %s limit %d offset %d;",
+			target,
+			limit,
+			offset
+		)
+
+		table.insert(args, "-c")
+		table.insert(args, excluded_column_cte)
+		table.insert(args, "-c")
+		table.insert(args, filtered_select)
+	else
+		local basic_select = string.format("select * from %s limit %d offset %d;", target, limit, offset)
+		table.insert(args, "-c")
+		table.insert(args, basic_select)
+	end
+
+	return args
 end
 
 local function generate_peek_query(target, job, limit, offset)
@@ -247,15 +295,12 @@ LIMIT %d OFFSET %d;
 	end
 
 	local source = "'" .. tostring(target) .. "'"
+
 	if mode == "standard" then
-		return string.format(
-			"SELECT %s* FROM %s LIMIT %d OFFSET %d;",
-			row_id and "CAST(rowid as VARCHAR) as row_id, " or "",
-			source,
-			limit,
-			offset
-		)
+		-- Use full scroll-aware column filtering logic
+		return generate_lateral_scroll_query(source, limit, offset)
 	else
+		-- Summarized view
 		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source
 		local summary_cte = generate_summary_cte(summary_source)
 		return string.format(
@@ -314,7 +359,7 @@ function M:peek(job)
 	ya.dbg("peek triggered")
 	local raw_skip = job.skip or 0
 	if raw_skip == 0 then
-		set_state("collumns_scrolled", 0)
+		set_state("scrolled_columns", 0)
 	end
 	local skip = math.max(0, raw_skip - 50)
 	job.skip = skip
