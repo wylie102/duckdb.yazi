@@ -43,7 +43,10 @@ function M:setup(opts)
 	local mode = opts.mode or "summarized"
 	local os = ya.target_os()
 	local column_width = opts.minmax_column_width or 21
-	local row_id = opts.row_id or false
+	local row_id = opts.row_id
+	if row_id == nil then
+		row_id = false
+	end
 	local column_fit_factor = opts.column_fit_factor or 10
 
 	set_state("mode", mode)
@@ -308,9 +311,19 @@ local function generate_standard_query(target, job, limit, offset)
 	local scroll = get_state("scrolled_columns") or 0
 	local args = {}
 	local actual_width = math.max((job.area and job.area.w or 80), 80)
-	local fetched_columns = math.floor(actual_width / get_state("column_fit_factor")) + scroll --7.73 will display even narrowest collumns
+	local column_fit_factor = get_state("column_fit_factor") or 7
+	local fetched_columns = math.floor(actual_width / column_fit_factor) + scroll
+	local row_id_mode = get_state("row_id") -- can be true, false, or "dynamic"
+
 	ya.dbg(actual_width)
 	ya.dbg(fetched_columns)
+
+	-- Determine if row_id should be prepended
+	local row_id_prefix = ""
+	local row_id_enabled = (row_id_mode == true) or (row_id_mode == "dynamic" and scroll > 0)
+	if row_id_enabled then
+		row_id_prefix = "row_number() over () as row, "
+	end
 
 	local excluded_column_cte = string.format(
 		[[
@@ -330,7 +343,8 @@ set variable included_columns = (
 	)
 
 	local filtered_select = string.format(
-		"select columns(c -> list_contains(getvariable('included_columns'), c)) from %s limit %d offset %d;",
+		"select %scolumns(c -> list_contains(getvariable('included_columns'), c)) from %s limit %d offset %d;",
+		row_id_prefix,
 		target,
 		limit,
 		offset
@@ -387,7 +401,6 @@ end
 
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_state("mode")
-	local row_id = get_state("row_id")
 	local is_original_file = (target == job.file.url)
 
 	-- If the file itself is a DuckDB database, list tables/columns

@@ -201,7 +201,7 @@ Add the following:
     -- DuckDB plugin configuration
 require("duckdb"):setup({
   mode = "standard"/"summarized",            -- Default: "summarized"
-  row_id = true/false,                       -- Default: false
+  row_id = true/false/"dynamic",             -- Default: false
   minmax_column_width = int                  -- Default: 21
   column_fit_factor = float                  -- Default: 10.0
 })
@@ -215,7 +215,7 @@ If you don't include a setting, it will revert to the default.
 
 - mode - the view that will be the default on startup. The default is summarized, but this can sometimes be slow if running while the files are also being cached. Most of the time it will be the same speed as standard, so pick the one you like.
 
-- row_id - displays a row column when viewing in standard mode.
+- row_id - displays a row column when viewing in standard mode. If set to dynamic it will only turn on when scrolling columns and will always be the left most column.
 
 - minmax_column_width - is the number of characters displayed in the min and max columns in summarized view. Default is 21, which is roughly enough to see date and time in a datetime column. If you need more set it higher, if you want mim/max to take up less space set it lower.
 
