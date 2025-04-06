@@ -162,7 +162,17 @@ run = "plugin duckdb +1"
 desc = "Scroll one column to the right"
 ```
 
->I use 'H' and 'L' because it makes logical sense to me, but these overwrite 'H' previous directory and 'L' next directory (different from standard 'h' and 'l' for patent and child directory). So if ou use those you might want to choose something else, or remap those to <C-h> and <C-l> instead.
+>I use 'H' and 'L' because it makes logical sense to me.
+>
+>But these overwrite:
+>
+>- 'H' - previous directory and
+>- 'L' - next directory
+>(different from standard 'h' and 'l' for patent and child directory).
+>
+>So if you use those you might want to choose something else, or remap those to <C-h> and <C-l> instead.
+
+<br>
 
 ### Aditional setup and recommended plugins for more preview space
 
