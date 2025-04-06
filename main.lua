@@ -226,21 +226,21 @@ end
 local function generate_db_query(limit, offset)
 	local scroll = get_state("scrolled_columns") or 0
 
-	-- Scrollable metadata fields (in display order)
-	local fields = { "rows", "columns", "has_pk", "indexes", "column_names" }
+	local metadata_fields = { "rows", "columns", "has_pk", "indexes" }
+	local visible_column_count = 10
+	local max_scroll_metadata = #metadata_fields
+	local metadata_projection = { "table_name" }
 
-	-- Always show table name
-	local selected_fields = { "table_name" }
+	if scroll < max_scroll_metadata then
+		-- Phase 1: Hide metadata columns one by one
+		for i = scroll + 1, #metadata_fields do
+			table.insert(metadata_projection, metadata_fields[i])
+		end
+		table.insert(metadata_projection, "column_names") -- always show
 
-	-- Add scrollable fields from current scroll index
-	for i = scroll + 1, #fields do
-		table.insert(selected_fields, fields[i])
-	end
-
-	local projection = table.concat(selected_fields, ", ")
-
-	return string.format(
-		[[
+		local projection = table.concat(metadata_projection, ", ")
+		return string.format(
+			[[
 WITH table_info AS (
   SELECT
     DISTINCT t.table_name,
@@ -250,17 +250,57 @@ WITH table_info AS (
     t.index_count AS indexes,
     STRING_AGG(c.column_name, ', ' ORDER BY c.column_index) OVER (PARTITION BY t.table_name) AS column_names
   FROM duckdb_tables() t
-  LEFT JOIN duckdb_columns() c
-    ON t.table_name = c.table_name
-  ORDER BY t.table_name
+  LEFT JOIN duckdb_columns() c ON t.table_name = c.table_name
 )
 SELECT %s FROM table_info
+ORDER BY table_name
 LIMIT %d OFFSET %d;
 ]],
-		projection,
-		limit,
-		offset
-	)
+			projection,
+			limit,
+			offset
+		)
+	else
+		-- Phase 2: Scroll inside column_names
+		local column_scroll = scroll - max_scroll_metadata
+		local start_pos = column_scroll + 1
+		local end_pos = column_scroll + visible_column_count
+
+		return string.format(
+			[[
+WITH raw AS (
+  SELECT
+    t.table_name,
+    c.column_name,
+    row_number() OVER (PARTITION BY t.table_name ORDER BY c.column_index) AS col_pos
+  FROM duckdb_tables() t
+  LEFT JOIN duckdb_columns() c ON t.table_name = c.table_name
+),
+scrolling AS (
+  SELECT
+    table_name,
+    column_name,
+    col_pos
+  FROM raw
+  WHERE col_pos >= %d AND col_pos < %d
+),
+aggregated AS (
+  SELECT
+    table_name,
+    STRING_AGG(column_name, ', ' ORDER BY col_pos) AS column_names
+  FROM scrolling
+  GROUP BY table_name
+)
+SELECT table_name, column_names FROM aggregated
+ORDER BY table_name
+LIMIT %d OFFSET %d;
+]],
+			start_pos,
+			end_pos,
+			limit,
+			offset
+		)
+	end
 end
 
 local function generate_standard_query(target, job, limit, offset)
