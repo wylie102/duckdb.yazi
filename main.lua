@@ -222,44 +222,42 @@ local function create_cache(job, mode, path)
 	return out ~= nil
 end
 
-local function generate_lateral_scroll_query(target, limit, offset)
+local function generate_lateral_scroll_query(target, job, limit, offset)
 	local scroll = get_state("scrolled_columns") or 0
 	local args = {}
+	local actual_width = math.max((job.area and job.area.w or 80), 80)
+	local fetched_columns = math.floor(actual_width / 10) + scroll --7.73 will display even narrowest collumns
+	ya.dbg(actual_width)
+	ya.dbg(fetched_columns)
 
-	if scroll > 0 then
-		local excluded_column_cte = string.format(
-			[[
-set variable excluded_columns = (
+	local excluded_column_cte = string.format(
+		[[
+set variable included_columns = (
 	with column_list as (
 		select column_name, row_number() over () as row
 		from (describe select * from %s)
 	)
 	select list(column_name)
 	from column_list
-	where row <= %d
+	where row > %d and row <= (%d)
 );
 ]],
-			target,
-			scroll
-		)
+		target,
+		scroll,
+		fetched_columns
+	)
 
-		local filtered_select = string.format(
-			"select columns(c -> not list_contains(getvariable('excluded_columns'), c)) from %s limit %d offset %d;",
-			target,
-			limit,
-			offset
-		)
+	local filtered_select = string.format(
+		"select columns(c -> list_contains(getvariable('included_columns'), c)) from %s limit %d offset %d;",
+		target,
+		limit,
+		offset
+	)
 
-		table.insert(args, "-c")
-		table.insert(args, excluded_column_cte)
-		table.insert(args, "-c")
-		table.insert(args, filtered_select)
-	else
-		local basic_select = string.format("select * from %s limit %d offset %d;", target, limit, offset)
-		table.insert(args, "-c")
-		table.insert(args, basic_select)
-	end
-
+	table.insert(args, "-c")
+	table.insert(args, excluded_column_cte)
+	table.insert(args, "-c")
+	table.insert(args, filtered_select)
 	return args
 end
 
@@ -298,7 +296,7 @@ LIMIT %d OFFSET %d;
 
 	if mode == "standard" then
 		-- Use full scroll-aware column filtering logic
-		return generate_lateral_scroll_query(source, limit, offset)
+		return generate_lateral_scroll_query(source, job, limit, offset)
 	else
 		-- Summarized view
 		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source
