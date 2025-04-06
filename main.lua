@@ -44,13 +44,14 @@ function M:setup(opts)
 	local os = ya.target_os()
 	local column_width = opts.minmax_column_width or 21
 	local row_id = opts.row_id or false
-	local avg_column_chars = opts.column_fit_factor or 10
+	local column_fit_factor = opts.column_fit_factor or 10
 
 	set_state("mode", mode)
 	set_state("os", os)
 	set_state("column_width", column_width)
 	set_state("row_id", row_id)
 	set_state("scrolled_columns", 0)
+	set_state("column_fit_factor", column_fit_factor)
 end
 
 local function generate_preload_query(job, mode)
@@ -307,7 +308,7 @@ local function generate_standard_query(target, job, limit, offset)
 	local scroll = get_state("scrolled_columns") or 0
 	local args = {}
 	local actual_width = math.max((job.area and job.area.w or 80), 80)
-	local fetched_columns = math.floor(actual_width / 10) + scroll --7.73 will display even narrowest collumns
+	local fetched_columns = math.floor(actual_width / get_state("column_fit_factor")) + scroll --7.73 will display even narrowest collumns
 	ya.dbg(actual_width)
 	ya.dbg(fetched_columns)
 
