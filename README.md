@@ -33,11 +33,29 @@ Supported file types:
 
 ## New Features
 
-First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and maintaining yazi, and for helping me fix a particularly annoying bug in this release.
+### Horizontal Scrolling
 
 <br>
 
->**Very latest** - If you want info on the latest (cache related changes) then see [here](https://github.com/wylie102/duckdb.yazi?tab=readme-ov-file#setup-and-usage-changes-from-previous-versions). Otherwise keep reading new features and config options below.
+<https://github.com/user-attachments/assets/b347a7e8-05ea-442d-a88e-e2447975b653>
+
+<br>
+
+- Now supports scrolling horizontally (by column).
+- Works in all views
+- In the database view you can even scroll through the list of column names.
+
+>Requires a small amount of extra configuration from previous versions. These are keymaps (I use `H` and `L`) and some other aditional customisation options.
+>
+>See the [Installation](https://github.com/wylie102/duckdb.yazi/tree/main?tab=readme-ov-file#installation) and [Configuration](https://github.com/wylie102/duckdb.yazi/tree/main?tab=readme-ov-file#configurationcustomisation) sections.
+
+>**Cache changes - update 04/04/25** - If you want info on the latest (cache related changes) then see [here](https://github.com/wylie102/duckdb.yazi?tab=readme-ov-file#setup-and-usage-changes-from-previous-versions). Otherwise keep reading new features and config options below.
+<br>
+
+## Features
+
+First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and maintaining yazi, and for helping me fix a particularly annoying bug in the last release.
+
 <br>
 
 ### Output Syntax Highlighting
@@ -162,13 +180,13 @@ run = "plugin duckdb +1"
 desc = "Scroll one column to the right"
 ```
 
->I use 'H' and 'L' because it makes logical sense to me.
+>I use `H` and `L` because it makes logical sense to me.
 >
 >But these overwrite:
 >
->- 'H' - previous directory and
->- 'L' - next directory
->(different from standard 'h' and 'l' for patent and child directory).
+>- `H` - previous directory and
+>- `L` - next directory
+>(different from standard `h` and `l` for patent and child directory).
 >
 >So if you use those you might want to choose something else, or remap those to <C-h> and <C-l> instead.
 

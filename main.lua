@@ -12,28 +12,18 @@ local get_state = ya.sync(function(state, key)
 end)
 
 function M:entry(job)
-	ya.dbg("entry triggered")
-	ya.dbg(job)
-	ya.dbg("job.args[1] = " .. tostring(job.args and job.args[1]))
-
 	local scroll_delta = tonumber(job.args and job.args[1])
-	ya.dbg("scroll_delta = " .. tostring(scroll_delta))
 
 	if not scroll_delta then
-		ya.dbg("DuckDB column scroll entry: Invalid or missing scroll delta; exiting.")
+		ya.err("DuckDB column scroll entry: Invalid or missing scroll delta; exiting.")
 		return
 	end
 
 	local scrolled_columns = get_state("scrolled_columns") or 0
-
 	scrolled_columns = math.max(0, scrolled_columns + scroll_delta)
-	ya.dbg("scrolled_columns = " .. scrolled_columns)
-
 	set_state("scrolled_columns", scrolled_columns)
-	ya.dbg("state set")
 
 	ya.manager_emit("seek", { "lateral scroll" })
-	ya.dbg("seek emitted")
 end
 
 -- Setup from init.lua: require("duckdb"):setup({ mode = "standard"/"summarized" })
@@ -50,6 +40,7 @@ function M:setup(opts)
 	local column_fit_factor = opts.column_fit_factor or 10
 
 	set_state("mode", mode)
+	set_state("mode_changed", false)
 	set_state("os", os)
 	set_state("column_width", column_width)
 	set_state("row_id", row_id)
@@ -313,10 +304,7 @@ local function generate_standard_query(target, job, limit, offset)
 	local actual_width = math.max((job.area and job.area.w or 80), 80)
 	local column_fit_factor = get_state("column_fit_factor") or 7
 	local fetched_columns = math.floor(actual_width / column_fit_factor) + scroll
-	local row_id_mode = get_state("row_id") -- can be true, false, or "dynamic"
-
-	ya.dbg(actual_width)
-	ya.dbg(fetched_columns)
+	local row_id_mode = get_state("row_id")
 
 	-- Determine if row_id should be prepended
 	local row_id_prefix = ""
@@ -405,7 +393,6 @@ local function generate_peek_query(target, job, limit, offset)
 
 	-- If the file itself is a DuckDB database, list tables/columns
 	if is_original_file and is_duckdb_database(job.file.url) then
-		ya.dbg("generate_peek_query: target is a database, returning schema listing.")
 		return generate_db_query(limit, offset)
 	end
 
@@ -458,17 +445,18 @@ end
 
 -- Peek with mode toggle if scrolling at top
 function M:peek(job)
-	ya.dbg("peek triggered")
 	local raw_skip = job.skip or 0
 	if raw_skip == 0 then
 		set_state("scrolled_columns", 0)
+	end
+	if get_state("mode_changed") then
+		set_state("scrolled_columns", 0)
+		set_state("mode_changed", false)
 	end
 	local skip = math.max(0, raw_skip - 50)
 	job.skip = skip
 
 	local mode = get_state("mode")
-	local scrolled_collumns = get_state("scrolled_columns")
-	ya.dbg(scrolled_collumns)
 
 	local cache = get_cache_path(job, mode)
 	local file_url = job.file.url
@@ -499,15 +487,11 @@ function M:peek(job)
 		end
 	end
 
-	ya.dbg(string.format("Peek - result returned for: %s", file_url:name()))
 	ya.preview_widgets(job, { ui.Text.parse(output.stdout:sub(5):gsub("\r", "")):area(job.area) })
 end
 
 -- Seek, also triggers mode change if skip negative.
-function M:seek(job, args)
-	ya.dbg("seek triggered")
-	ya.dbg(job)
-	ya.dbg(args)
+function M:seek(job)
 	local OFFSET_BASE = 50
 	local current_skip = math.max(0, cx.active.preview.skip - OFFSET_BASE)
 	local units = job.units or 0
@@ -518,6 +502,7 @@ function M:seek(job, args)
 		local mode = get_state("mode")
 		local new_mode = (mode == "summarized") and "standard" or "summarized"
 		set_state("mode", new_mode)
+		set_state("mode_changed", true)
 		-- Trigger re-peek
 		ya.manager_emit("peek", { OFFSET_BASE, only_if = job.file.url })
 	else
