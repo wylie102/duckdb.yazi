@@ -174,11 +174,31 @@ Add the following:
 ```lua
     -- DuckDB plugin configuration
 require("duckdb"):setup({
-  mode = "standard",            -- Default: "summarized"
-  row_id = true,                -- Default: false
-  minmax_column_width = 30      -- Default: 21
+  mode = "standard"/"summarized",            -- Default: "summarized"
+  row_id = true/false,                       -- Default: false
+  minmax_column_width = int                  -- Default: 21
+  column_fit_factor = float                  -- Default: 10.0
 })
 ```
+
+If you don't include a setting, it will revert to the default.
+
+<br>
+
+### Explaination of settings
+
+- mode - the view that will be the default on startup. The default is summarized, but this can sometimes be slow if running while the files are also being cached. Most of the time it will be the same speed as standard, so pick the one you like.
+
+- row_id - displays a row column when viewing in standard mode.
+
+- minmax_column_width - is the number of characters displayed in the min and max columns in summarized view. Default is 21, which is roughly enough to see date and time in a datetime column. If you need more set it higher, if you want mim/max to take up less space set it lower.
+
+- column_fit_factor - this one is actually important but might feel a bit counter-intuitive so have a look below.
+  - TLDR: duckdb.yazi is designed to overspill the screen on the right side. Unless all your columns are incredibly narrow/you can see the right border of your table when there are still more columns to scroll OR you work with tables with a very large number of columns and scrolling them feels slightly show, you can probably leave it alone.
+  - Slightly longer instructions: To fully optimise this, 1. Lower it until your columns no longer spill off the end of the screen (check this on a few files) Step 2 - Increase by 1 so that columns again spill over the right border.
+  - More detailed explaination: Implementing column scrolling also gave us a mechanism to user-attachments only the columns we need to fill (in reality slightly overfill) the screen. The reason for this is that if the table is incredibly wide (has a high number of columns) it would slow down the query. But while the plugin can detect how wide the display area is, it doesn't know how wide your collumns are. So this number represents the average amount of space (in characters) duckdb.yazi expects each column to take up when deciding how many columns to request. columns_displayed = display_area_width / column_fit_factor. So larger number = fewer columns, smaller number = more columns. Ideally you want the columns to **just** spill over the right border of the screen which will give the feeling of movement when scrolling. The default - 10.0 - should accommodate most column sizes while giving good performance. Setting to 7.73 should display even the narrowest columns correctly, but may cause queries to be slightly slower when working with very large numbers of columns.
+
+### Configuring duckdb
 
 Configuration of DuckDB can be done in the `~/.duckdbrc` file.
 This should be placed in your home directory ([duckdb docs](https://duckdb.org/docs/stable/operations_manual/footprint_of_duckdb/files_created_by_duckdb)).
@@ -224,6 +244,7 @@ More information [here](https://duckdb.org/docs/stable/clients/cli/dot_commands#
 ## Setup and usage changes from previous versions
 
 ### A Note on the Latest update
+
 The caches are now stored as parquet files, previously they were mini duckdb databases because the duckdb documentation suggested better performance with similar file size to parquet. However, there seemt to be a minimum file size of ~500kb regardless of the amount of data stored. While that isn't huge, it could add up.
 
 So I did some tests and using parquet files we get file sizes of ~5kb for the summarized view and usually 70-130kb for standard view. So about 1/10th the size for both views. Load speeds were similar (or slightly faster) using parquet, for both caching and viewing operations.
@@ -231,6 +252,7 @@ So I did some tests and using parquet files we get file sizes of ~5kb for the su
 So we've moved to parquet. I have cache versioning implemented, so yazi will automatically switch to using the latest version. But won't delete the old cache files. These are temp files and will usually be deleted on reboot, but if you like you can clear the whole cache using `yazi --clear-cache`.
 
 ### Original version
+
 Previously, preview mode was selected by setting an environment variable (`DUCKDB_PREVIEW_MODE`).
 
 The new version no longer uses environment variables. Toggle preview modes directly within yazi using the keybinding described in the New Features section.

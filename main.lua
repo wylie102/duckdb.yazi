@@ -44,6 +44,7 @@ function M:setup(opts)
 	local os = ya.target_os()
 	local column_width = opts.minmax_column_width or 21
 	local row_id = opts.row_id or false
+	local avg_column_chars = opts.column_fit_factor or 10
 
 	set_state("mode", mode)
 	set_state("os", os)
@@ -222,7 +223,47 @@ local function create_cache(job, mode, path)
 	return out ~= nil
 end
 
-local function generate_lateral_scroll_query(target, job, limit, offset)
+local function generate_db_query(limit, offset)
+	local scroll = get_state("scrolled_columns") or 0
+
+	-- Scrollable metadata fields (in display order)
+	local fields = { "rows", "columns", "has_pk", "indexes", "column_names" }
+
+	-- Always show table name
+	local selected_fields = { "table_name" }
+
+	-- Add scrollable fields from current scroll index
+	for i = scroll + 1, #fields do
+		table.insert(selected_fields, fields[i])
+	end
+
+	local projection = table.concat(selected_fields, ", ")
+
+	return string.format(
+		[[
+WITH table_info AS (
+  SELECT
+    DISTINCT t.table_name,
+    t.estimated_size AS rows,
+    t.column_count AS columns,
+    t.has_primary_key AS has_pk,
+    t.index_count AS indexes,
+    STRING_AGG(c.column_name, ', ' ORDER BY c.column_index) OVER (PARTITION BY t.table_name) AS column_names
+  FROM duckdb_tables() t
+  LEFT JOIN duckdb_columns() c
+    ON t.table_name = c.table_name
+  ORDER BY t.table_name
+)
+SELECT %s FROM table_info
+LIMIT %d OFFSET %d;
+]],
+		projection,
+		limit,
+		offset
+	)
+end
+
+local function generate_standard_query(target, job, limit, offset)
 	local scroll = get_state("scrolled_columns") or 0
 	local args = {}
 	local actual_width = math.max((job.area and job.area.w or 80), 80)
@@ -261,6 +302,48 @@ set variable included_columns = (
 	return args
 end
 
+local function generate_summarized_query(source, limit, offset)
+	local scroll = get_state("scrolled_columns") or 0
+
+	-- These are the scrollable fields, in display order
+	local fields = {
+		'"count"',
+		'"unique"',
+		'"null"',
+		'"min"',
+		'"max"',
+		'"avg"',
+		'"std"',
+		'"q25"',
+		'"q50"',
+		'"q75"',
+	}
+
+	-- Always include the column name
+	local selected_fields = { '"column"' }
+
+	-- Add scrollable fields from scroll onwards
+	for i = scroll + 1, #fields do
+		table.insert(selected_fields, fields[i])
+	end
+
+	local summary_cte = generate_summary_cte(source)
+	local projection = table.concat(selected_fields, ", ")
+
+	return string.format(
+		[[
+WITH summary_cte AS (
+	%s
+)
+SELECT %s FROM summary_cte LIMIT %d OFFSET %d;
+]],
+		summary_cte,
+		projection,
+		limit,
+		offset
+	)
+end
+
 local function generate_peek_query(target, job, limit, offset)
 	local mode = get_state("mode")
 	local row_id = get_state("row_id")
@@ -269,49 +352,16 @@ local function generate_peek_query(target, job, limit, offset)
 	-- If the file itself is a DuckDB database, list tables/columns
 	if is_original_file and is_duckdb_database(job.file.url) then
 		ya.dbg("generate_peek_query: target is a database, returning schema listing.")
-		return string.format(
-			[[
-WITH table_info AS (
-  SELECT
-    DISTINCT t.table_name,
-    t.estimated_size as rows,
-    t.column_count as columns,
-    t.has_primary_key as has_pk,
-    t.index_count as indexes,
-    STRING_AGG(c.column_name, ', ' ORDER BY c.column_index) OVER (PARTITION BY t.table_name) AS column_names
-  FROM duckdb_tables() t
-  LEFT JOIN duckdb_columns() c
-    ON t.table_name = c.table_name
-  ORDER BY t.table_name
-)
-SELECT * FROM table_info
-LIMIT %d OFFSET %d;
-]],
-			limit,
-			offset
-		)
+		return generate_db_query(limit, offset)
 	end
 
 	local source = "'" .. tostring(target) .. "'"
 
 	if mode == "standard" then
-		-- Use full scroll-aware column filtering logic
-		return generate_lateral_scroll_query(source, job, limit, offset)
+		return generate_standard_query(source, job, limit, offset)
 	else
-		-- Summarized view
 		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source
-		local summary_cte = generate_summary_cte(summary_source)
-		return string.format(
-			[[
-WITH summary_cte AS (
-	%s
-)
-SELECT * FROM summary_cte LIMIT %d OFFSET %d;
-]],
-			summary_cte,
-			limit,
-			offset
-		)
+		return generate_summarized_query(summary_source, limit, offset)
 	end
 end
 
