@@ -17,7 +17,7 @@ This plugin previews your data files in yazi using DuckDB, with two available vi
   - Summarized mode: Uses DuckDB's summarize function, enhanced with custom formatting for readability
 - Preview duckdb databases
   - See the tables and the number of rows, columns, indexes in each. Plus a list of column names in index order.
-- Scroll rows using `J` and `K`
+- Scroll rows using `J` and `K` 
 - Scroll columns using your chosen keys ( I use `H` and `L` )
 - Change modes by pressing K when at the top of a file
 
