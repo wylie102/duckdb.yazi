@@ -128,6 +128,8 @@ First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and m
 
 ## Installation
 
+### Installing dependancies
+
 First you will need Yazi and DuckDB installed.
 
 - [Yazi Installation instructions](https://yazi-rs.github.io/docs/installation)
@@ -137,12 +139,14 @@ First you will need Yazi and DuckDB installed.
 Once these are installed you can use the yazi plugin manager to install the plugin.
 
 Use the command:
-
 ```
 ya pack -a wylie102/duckdb
 ```
-
 in your terminal
+
+<br>
+
+### yazi.toml
 
 Then navigate to your [yazi.toml](https://yazi-rs.github.io/docs/configuration/yazi#manager.ratio) file this should be the `yazi` folder in your `config` directory
 
@@ -167,6 +171,21 @@ prepend_preloaders = [
 ]
 ```
 
+<br>
+
+### init.lua
+Then create an `init.lua` file in the same folder and add
+
+```lua
+-- DuckDB plugin configuration
+require("duckdb"):setup()
+```
+
+This is where the configuration/settings can go ([see below](https://github.com/wylie102/duckdb.yazi?tab=readme-ov-file#configurationcustomisation)), but the init.lua file and this line are required for the plugin to run, even if the settings are blank. Another option is to add all of the settings with the defaults in so that it's easy to change at a later date.
+
+<br>
+
+### keymap.toml
 Then in your [keymap.toml](https://yazi-rs.github.io/docs/configuration/keymap) file add:
 
 ```toml
@@ -227,6 +246,8 @@ require("duckdb"):setup({
 ```
 
 If you don't include a setting, it will revert to the default.
+
+But the setup call `require("duckdb"):setup()` is still required for the plugin to intialize correctly.
 
 <br>
 
