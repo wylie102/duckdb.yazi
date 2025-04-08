@@ -227,7 +227,6 @@ local function generate_db_query(limit, offset)
 	local metadata_projection = { "table_name" }
 
 	if scroll < max_scroll_metadata then
-		-- Phase 1: Hide metadata columns one by one
 		for i = scroll + 1, #metadata_fields do
 			table.insert(metadata_projection, metadata_fields[i])
 		end
@@ -256,7 +255,6 @@ LIMIT %d OFFSET %d;
 			offset
 		)
 	else
-		-- Phase 2: Scroll inside column_names
 		local column_scroll = scroll - max_scroll_metadata
 		local start_pos = column_scroll + 1
 		local end_pos = column_scroll + visible_column_count
@@ -350,6 +348,7 @@ local function generate_summarized_query(source, limit, offset)
 
 	-- These are the scrollable fields, in display order
 	local fields = {
+		'"type"',
 		'"count"',
 		'"unique"',
 		'"null"',
