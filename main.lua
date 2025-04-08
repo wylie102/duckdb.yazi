@@ -140,7 +140,7 @@ local function get_cache_path(job, mode)
 end
 
 local function is_duckdb_database(path)
-	local name = path:name() or ""
+	local name = path.name or ""
 	return name:match("%.duckdb$") or name:match("%.db$")
 end
 
