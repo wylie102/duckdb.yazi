@@ -144,7 +144,10 @@ local function get_cache_path(job, mode)
 end
 
 local function is_duckdb_database(path)
-	local name = path:name() or ""
+	ya.dbg("is_duckdb_database called")
+	local name = path.name or ""
+	ya.dbg("name: " .. tostring(name))
+	ya.dbg("is_duckdb_database successful")
 	return name:match("%.duckdb$") or name:match("%.db$")
 end
 
