@@ -45,6 +45,7 @@ Supported file types:
 - Now supports scrolling horizontally (by column).
 - Works in all views
 - In the database view you can even scroll through the list of column names.
+- Output highlighting should now work across any os (where duckdb supports it).
 
 >Requires a small amount of extra configuration from previous versions. These are keymaps (I use `H` and `L`) and some other aditional customisation options.
 >
@@ -63,9 +64,6 @@ First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and m
 
 - Passes through the colors from the duckdb output as you would see if using directly in the terminal.
 - These colors can be configured in your `~/.duckdbrc` file, see the Configuration section for details.
-- Feature is only on MacOS at the moment.
-  - Planned for linux and Windows but need testers.
-  - Please support my [feature request](https://github.com/duckdb/duckdb/discussions/16885) with duckdb which will prevent the need for os specific versions and make implementation easier and more reliable.
 
 <br>
 
@@ -299,7 +297,7 @@ This uses gray for borders and NULLs and looks like this
 <img width="700" alt="Screenshot 2025-04-02 at 14 53 38" src="https://github.com/user-attachments/assets/d2267298-b91b-496c-ae74-1d432b826f6f" />
 
 You can also turn the highlighting off by adding `.highlight_results off`
-In which case it will look like below. (Note this is also how it will look on non mac os systems currently).
+In which case it will look like below.
 
 <img width="700" alt="Screenshot 2025-03-22 at 18 00 06" src="https://github.com/user-attachments/assets/db09fff9-2db1-4273-9ddf-34d0bf087967" />
 
