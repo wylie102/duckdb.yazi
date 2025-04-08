@@ -12,6 +12,7 @@ local get_state = ya.sync(function(state, key)
 end)
 
 function M:entry(job)
+	ya.dbg("entry called")
 	local scroll_delta = tonumber(job.args and job.args[1])
 
 	if not scroll_delta then
@@ -24,10 +25,12 @@ function M:entry(job)
 	set_state("scrolled_columns", scrolled_columns)
 
 	ya.manager_emit("seek", { "lateral scroll" })
+	ya.dbg("entry succesful")
 end
 
 -- Setup from init.lua: require("duckdb"):setup({ mode = "standard"/"summarized" })
 function M:setup(opts)
+	ya.dbg("setup called")
 	opts = opts or {}
 
 	local mode = opts.mode or "summarized"
@@ -46,6 +49,7 @@ function M:setup(opts)
 	set_state("row_id", row_id)
 	set_state("scrolled_columns", 0)
 	set_state("column_fit_factor", column_fit_factor)
+	ya.dbg("setup successful")
 end
 
 local function generate_preload_query(job, mode)
@@ -431,6 +435,7 @@ end
 
 -- Preload summarized and standard preview caches
 function M:preload(job)
+	ya.dbg("preload called")
 	for _, mode in ipairs({ "standard", "summarized" }) do
 		local path = get_cache_path(job, mode)
 		if path and not fs.cha(path) then
@@ -439,11 +444,13 @@ function M:preload(job)
 			create_cache(job, mode, path)
 		end
 	end
+	ya.dbg("preload successful")
 	return true
 end
 
 -- Peek with mode toggle if scrolling at top
 function M:peek(job)
+	ya.dbg("peek called")
 	local raw_skip = job.skip or 0
 	if raw_skip == 0 then
 		set_state("scrolled_columns", 0)
@@ -487,10 +494,12 @@ function M:peek(job)
 	end
 
 	ya.preview_widgets(job, { ui.Text.parse(output.stdout:sub(5):gsub("\r", "")):area(job.area) })
+	ya.dbg("peek successful")
 end
 
 -- Seek, also triggers mode change if skip negative.
 function M:seek(job)
+	ya.dbg("seek called")
 	local OFFSET_BASE = 50
 	local current_skip = math.max(0, cx.active.preview.skip - OFFSET_BASE)
 	local units = job.units or 0
@@ -507,6 +516,7 @@ function M:seek(job)
 	else
 		ya.manager_emit("peek", { new_skip + OFFSET_BASE, only_if = job.file.url })
 	end
+	ya.dbg("seek successful")
 end
 
 return M
