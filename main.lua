@@ -145,45 +145,28 @@ local function is_duckdb_database(path)
 end
 
 -- Run queries.
-local function run_query(query, target)
-	local args = {}
-	if is_duckdb_database(target) then
-		table.insert(args, "-readonly")
-		table.insert(args, tostring(target))
-	end
-	table.insert(args, "-c")
-	table.insert(args, query)
-	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
-	if not child then
-		return nil
-	end
-	local output, err = child:wait_with_output()
-	if err or not output.status.success then
-		ya.err(err)
-		return nil
-	end
-	return output
-end
-
-local function run_query_ascii_preview_mac(job, query, target)
+local function run_query(job, query, target)
 	local width = math.max((job.area and job.area.w * 3 or 80), 80)
 	local height = math.max((job.area and job.area.h or 25), 25)
 
-	local args = { "-q", "/dev/null", "duckdb" }
+	local args = {}
+
 	if is_duckdb_database(target) then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
 
-	-- Inject duckbox config via separate -c args before the main query
+	-- Duckbox config
 	table.insert(args, "-c")
 	table.insert(args, "SET enable_progress_bar = false;")
 	table.insert(args, "-c")
 	table.insert(args, string.format(".maxwidth %d", width))
 	table.insert(args, "-c")
 	table.insert(args, string.format(".maxrows %d", height))
+	table.insert(args, "-c")
+	table.insert(args, ".highlight_results on")
 
-	-- Add the actual query (can be string or list of -c args)
+	-- Add query (string or list of -c args)
 	if type(query) == "table" then
 		for _, item in ipairs(query) do
 			table.insert(args, item)
@@ -193,15 +176,15 @@ local function run_query_ascii_preview_mac(job, query, target)
 		table.insert(args, query)
 	end
 
-	local child = Command("script"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 	if not child then
-		ya.err("Failed to spawn script")
+		ya.err("Failed to spawn DuckDB")
 		return nil
 	end
 
 	local output, err = child:wait_with_output()
-	if err or not output or not output.status.success then
-		ya.err("DuckDB (via script) error: " .. (err or output.stderr or "[unknown error]"))
+	if err or not output.status.success then
+		ya.err("DuckDB error: " .. (err or output.stderr or "[unknown error]"))
 		return nil
 	end
 
@@ -214,7 +197,8 @@ local function create_cache(job, mode, path)
 	end
 
 	local sql = generate_preload_query(job, mode)
-	local out = run_query(string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
+	local out =
+		run_query(job, string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
 	return out ~= nil
 end
 
@@ -419,16 +403,6 @@ local function is_duckdb_error(output)
 	return false
 end
 
-local function os_run_peek_query(job, target, limit, offset)
-	local operating_system = get_state("os")
-	local query = generate_peek_query(target, job, limit, offset)
-	if operating_system == "macos" then
-		return run_query_ascii_preview_mac(job, query, target)
-	else
-		return run_query(query, target)
-	end
-end
-
 -- Preload summarized and standard preview caches
 function M:preload(job)
 	for _, mode in ipairs({ "standard", "summarized" }) do
@@ -464,7 +438,8 @@ function M:peek(job)
 	local limit = job.area.h - 7
 	local offset = skip
 
-	local output = os_run_peek_query(job, target, limit, offset)
+	local query = generate_peek_query(target, job, limit, offset)
+	local output = run_query(job, query, target)
 	if not output or is_duckdb_error(output) then
 		if output and output.stdout then
 			ya.err("DuckDB returned an error or invalid output:\n" .. output.stdout)
@@ -474,7 +449,8 @@ function M:peek(job)
 
 		if target ~= file_url then
 			target = file_url
-			output = os_run_peek_query(job, target, limit, offset)
+			query = generate_peek_query(target, job, limit, offset)
+			output = run_query(job, query, target)
 			if not output or is_duckdb_error(output) then
 				if output and output.stdout then
 					ya.err("Fallback DuckDB output:\n" .. output.stdout)
@@ -486,7 +462,10 @@ function M:peek(job)
 		end
 	end
 
-	ya.preview_widgets(job, { ui.Text.parse(output.stdout:sub(5):gsub("\r", "")):area(job.area) })
+	ya.dbg("stdout: " .. tostring(output.stdout))
+	ya.preview_widgets(job, {
+		ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
+	})
 end
 
 -- Seek, also triggers mode change if skip negative.
