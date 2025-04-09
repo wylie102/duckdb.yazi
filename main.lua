@@ -141,19 +141,42 @@ local function get_cache_path(job, mode)
 	return Url(tostring(base) .. "_" .. mode .. ".parquet")
 end
 
-local function is_duckdb_database(path)
+local extension_map = {
+	csv = "csv",
+	tsv = "csv",
+	txt = "text",
+	json = "json",
+	parquet = "parquet",
+	xlsx = "excel",
+	duckdb = "duckdb",
+	db = "duckdb",
+}
+
+local function get_extension(filename)
+	-- Match the last "dot + word characters" at the end of the string
+	return filename:match("^.+%.([a-zA-Z0-9]+)$")
+end
+
+local function check_file_type(path)
 	local name = path.name or ""
-	return name:match("%.duckdb$") or name:match("%.db$")
+	local ext = get_extension(name)
+	if ext then
+		local filetype = extension_map[ext:lower()]
+		if filetype then
+			return filetype
+		end
+	end
+	ya.err("File is not a supported file type")
 end
 
 -- Run queries.
-local function run_query(job, query, target)
+local function run_query(job, query, target, file_type)
 	local width = math.max((job.area and job.area.w * 3 or 80), 80)
 	local height = math.max((job.area and job.area.h or 25), 25)
 
 	local args = {}
 
-	if is_duckdb_database(target) then
+	if file_type == "duckdb" then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
@@ -197,14 +220,19 @@ local function run_query(job, query, target)
 	return output
 end
 
-local function create_cache(job, mode, path)
+local function create_cache(job, mode, path, file_type)
 	if fs.cha(path) then
 		return true
 	end
 
-	local sql = generate_preload_query(job, mode)
-	local out =
-		run_query(job, string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", sql, tostring(path)), job.file.url)
+	-- TODO: change this to use it's own run_query function
+	local base_query = generate_preload_query(job, mode)
+	local out = run_query(
+		job,
+		string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, tostring(path)),
+		job.file.url,
+		file_type
+	)
 	return out ~= nil
 end
 
@@ -376,12 +404,12 @@ SELECT %s FROM summary_cte LIMIT %d OFFSET %d;
 	)
 end
 
-local function generate_peek_query(target, job, limit, offset)
+local function generate_peek_query(target, job, limit, offset, file_type)
 	local mode = get_state("mode")
 	local is_original_file = (target == job.file.url)
 
 	-- If the file itself is a DuckDB database, list tables/columns
-	if is_original_file and is_duckdb_database(job.file.url) then
+	if is_original_file and file_type == "duckdb" then
 		return generate_db_query(limit, offset)
 	end
 
@@ -395,28 +423,18 @@ local function generate_peek_query(target, job, limit, offset)
 	end
 end
 
-local function is_duckdb_error(output)
-	if not output or not output.stdout then
-		return true
-	end
-
-	local head = output.stdout:sub(1, 256)
-
-	if head:match("\27%[1m\27%[31m[%w%s]+Error:") then
-		return true
-	end
-
-	return false
-end
-
 -- Preload summarized and standard preview caches
 function M:preload(job)
+	file_type = check_file_type(job.file.url)
+	if file_type == "duckdb" then
+		return true
+	end
 	for _, mode in ipairs({ "standard", "summarized" }) do
 		local path = get_cache_path(job, mode)
 		if path and not fs.cha(path) then
 			-- brief sleep to avoid blocking peek call when entering dir for first time.
 			ya.sleep(0.1)
-			create_cache(job, mode, path)
+			create_cache(job, mode, path, file_type)
 		end
 	end
 	return true
@@ -436,16 +454,17 @@ function M:peek(job)
 	job.skip = skip
 
 	local mode = get_state("mode")
+	local file_url = job.file.url
+	local file_type = check_file_type(file_url)
 
 	local cache = get_cache_path(job, mode)
-	local file_url = job.file.url
 	local target = (cache and fs.cha(cache)) and cache or file_url
 
 	local limit = job.area.h - 7
 	local offset = skip
 
-	local query = generate_peek_query(target, job, limit, offset)
-	local output = run_query(job, query, target)
+	local query = generate_peek_query(target, job, limit, offset, file_type)
+	local output = run_query(job, query, target, file_type)
 	if not output or is_duckdb_error(output) then
 		if output and output.stdout then
 			ya.err("DuckDB returned an error or invalid output:\n" .. output.stdout)
@@ -455,9 +474,9 @@ function M:peek(job)
 
 		if target ~= file_url then
 			target = file_url
-			query = generate_peek_query(target, job, limit, offset)
-			output = run_query(job, query, target)
-			if not output or is_duckdb_error(output) then
+			query = generate_peek_query(target, job, limit, offset, file_type)
+			output = run_query(job, query, target, file_type)
+			if not output then
 				if output and output.stdout then
 					ya.err("Fallback DuckDB output:\n" .. output.stdout)
 				end
