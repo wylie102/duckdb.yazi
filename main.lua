@@ -1,5 +1,6 @@
 --- @since 25.4.8
 -- DuckDB Plugin for Yazi
+-- TODO: look at preserving current skip position when re-peeking
 local M = {}
 
 local set_state = ya.sync(function(state, key, value)
@@ -104,7 +105,7 @@ SELECT
 	column_type AS type,
 	count,
 	approx_unique AS unique,
-	null_percentage AS null,
+	null_percentage AS "null%%",
 	LEFT(min, %d) AS min,
 	LEFT(max, %d) AS max,
 	CASE
@@ -257,9 +258,6 @@ local function run_query(job, query, target, file_type)
 		return nil
 	end
 
-	ya.dbg("stdout: " .. (output.stdout or "[no stdout]"))
-	ya.dbg("stderr: " .. (output.stderr or "[no stderr]"))
-	ya.dbg("status: " .. tostring(output.status.success))
 	return output
 end
 
@@ -378,7 +376,7 @@ set variable included_columns = (
 	with column_list as (
 		select column_name, row_number() over () as row
 		from (describe select * from %s)
-	)
+	)  
 	select list(column_name)
 	from column_list
 	where row > %d and row <= (%d)
@@ -412,7 +410,7 @@ local function generate_summarized_query(source, limit, offset)
 		'"type"',
 		'"count"',
 		'"unique"',
-		'"null"',
+		'"null%"',
 		'"min"',
 		'"max"',
 		'"avg"',
@@ -460,15 +458,65 @@ local function generate_peek_query(target, job, limit, offset, file_type)
 
 	if mode == "standard" then
 		return generate_standard_query(source, job, limit, offset)
+	end
+
+	if file_type ~= "parquet" then
+		local summary_source = is_original_file
+				and string.format(
+					[[(select
+          column_name,
+          column_type,
+          '   ⏱ ' as count,
+          '   ⏱ ' as "approx_unique",
+          '   ⏱ ' as "null_percentage",
+          '   ⏱ ' as min,
+          '   ⏱ ' as max,
+          '   ⏱ ' as avg,
+          '   ⏱ ' as std,
+          '   ⏱ ' as q25,
+          '   ⏱ ' as q50,
+          '   ⏱ ' as q75
+          from (describe select * from %s))]],
+					source,
+					source
+				)
+			or source
+		return generate_summarized_query(summary_source, limit, offset)
 	else
-		local summary_source = is_original_file and string.format("(summarize select * from %s)", source) or source
+		local summary_source = is_original_file
+				and string.format(
+					[[
+        (select
+        d.column_name,
+        d.column_type,
+        sum(m.num_values) as count,
+        '   ⏱ ' as "approx_unique",
+        '   ⏱ ' as "null_percentage",
+        case when min(m.stats_min) is null then '   ⏱ ' else min(m.stats_min) end as min,
+        case when min(m.stats_max) is null then '   ⏱ ' else max(m.stats_max) end as max,
+        '   ⏱ ' as "avg",
+        '   ⏱ ' as "std",
+        '   ⏱ ' as q25,
+        '   ⏱ ' as q50,
+        '   ⏱ ' as q75
+        from (describe select * from %s) d 
+        left join parquet_metadata(%s) m 
+        on d.column_name = m.path_in_schema
+        group by all
+        order by min(column_id))
+        ]],
+					source,
+					source
+				)
+			or source
+		ya.dbg("summary_source: " .. summary_source)
 		return generate_summarized_query(summary_source, limit, offset)
 	end
 end
 
 -- Preload summarized and standard preview caches
 function M:preload(job)
-	file_type = check_file_type(job.file.url)
+	local file_type = check_file_type(job.file.url)
 	if file_type == "duckdb" then
 		return true
 	end
@@ -528,7 +576,9 @@ function M:peek(job)
 
 	local query = generate_peek_query(target, job, limit, offset, file_type)
 	local output = run_query(job, query, target, file_type)
-	if not output or is_duckdb_error(output) then
+	ya.dbg("first query run")
+	-- TODO: look at how output and error are handled/bundled and adjust logic accordingly
+	if not output then
 		if output and output.stdout then
 			ya.err("DuckDB returned an error or invalid output:\n" .. output.stdout)
 		else
@@ -539,6 +589,7 @@ function M:peek(job)
 			target = file_url
 			-- TODO: needs to use full summarized query
 			query = generate_peek_query(target, job, limit, offset, file_type)
+			ya.dbg("query: " .. query)
 			output = run_query(job, query, target, file_type)
 			if not output then
 				if output and output.stdout then
@@ -551,7 +602,7 @@ function M:peek(job)
 		end
 	end
 
-	if target == file_url and not use_cache then
+	if target == file_url and not use_cache and mode == "summarized" then
 		ya.dbg("stdout: " .. tostring(output.stdout))
 		ya.preview_widgets(job, {
 			ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
