@@ -1,3 +1,4 @@
+--- @since 25.4.8
 -- DuckDB Plugin for Yazi
 local M = {}
 
@@ -462,7 +463,6 @@ function M:peek(job)
 		end
 	end
 
-	ya.dbg("stdout: " .. tostring(output.stdout))
 	ya.preview_widgets(job, {
 		ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
 	})
