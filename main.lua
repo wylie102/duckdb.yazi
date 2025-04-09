@@ -140,9 +140,32 @@ local function get_cache_path(job, mode)
 	return Url(tostring(base) .. "_" .. mode .. ".parquet")
 end
 
-local function is_duckdb_database(path)
+local extension_map = {
+	csv = "csv",
+	tsv = "csv",
+	txt = "text",
+	json = "json",
+	parquet = "parquet",
+	xlsx = "excel",
+	duckdb = "duckdb",
+	db = "duckdb",
+}
+
+local function get_extension(filename)
+	-- Match the last "dot + word characters" at the end of the string
+	return filename:match("^.+%.([a-zA-Z0-9]+)$")
+end
+
+local function check_file_type(path)
 	local name = path.name or ""
-	return name:match("%.duckdb$") or name:match("%.db$")
+	local ext = get_extension(name)
+	if ext then
+		local filetype = extension_map[ext:lower()]
+		if filetype then
+			return filetype
+		end
+	end
+	ya.err("File is not a supported file type")
 end
 
 -- Run queries.
@@ -152,7 +175,7 @@ local function run_query(job, query, target)
 
 	local args = {}
 
-	if is_duckdb_database(target) then
+	if check_file_type(target) == "duckdb" then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
 	end
@@ -376,7 +399,7 @@ local function generate_peek_query(target, job, limit, offset)
 	local is_original_file = (target == job.file.url)
 
 	-- If the file itself is a DuckDB database, list tables/columns
-	if is_original_file and is_duckdb_database(job.file.url) then
+	if is_original_file and check_file_type(job.file.url) == "duckdb" then
 		return generate_db_query(limit, offset)
 	end
 
