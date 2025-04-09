@@ -21,26 +21,26 @@ body:
     validations:
       required: true
   - type: input
-    id: yazi version
+    id: yazi_version
     attributes:
       label: What version of yazi are you using?
       placeholder: "ex: 25.4.8"
     validations:
       required: true
- - type: input
-    id: duckdb version
+  - type: input
+    id: duckdb_version
     attributes:
       label: What version of duckdb are you using?
       placeholder: "ex: 1.2.2"
     validations:
       required: true
   - type: dropdown
-    id: latest version of duckdb.yazi
+    id: latest_version_of_duckdb_yazi
     attributes:
       label: Have you upgraded to the latest version of duckdb.yazi?
       options:
-        - Yes
-        - No
+        - "Yes"
+        - "No"
     validations:
       required: true
   - type: textarea
