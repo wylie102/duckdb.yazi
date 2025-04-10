@@ -12,6 +12,41 @@ local get_state = ya.sync(function(state, key)
 	return state.opts[key]
 end)
 
+local add_to_cache_completed_list = ya.sync(function(state, cache_str)
+	ya.dbg("adding to completed list: " .. cache_str)
+	state.completed = state.completed or {}
+	state.completed[cache_str] = true
+end)
+
+local remove_from_cache_completed_list = ya.sync(function(state, cache_str)
+	ya.dbg("removing from completed list: " .. cache_str)
+	state.completed = state.completed or {}
+	state.completed[cache_str] = nil
+end)
+
+local is_cache_completed = ya.sync(function(state, cache_str)
+	local list = state.completed or {}
+	return list[cache_str] == true
+end)
+
+local add_to_preload_list = ya.sync(function(state, cache_str)
+	ya.dbg("adding to preload list: " .. cache_str)
+	state.preloading = state.preloading or {}
+	state.preloading[cache_str] = true
+end)
+
+local remove_from_preload_list = ya.sync(function(state, cache_str)
+	ya.dbg("removing from preload list: " .. cache_str)
+	state.preloading = state.preloading or {}
+	state.preloading[cache_str] = nil
+	add_to_cache_completed_list(cache_str)
+end)
+
+local is_file_preloading = ya.sync(function(state, cache_path)
+	local list = state.preloading or {}
+	return list[cache_path] == true
+end)
+
 function M:entry(job)
 	local scroll_delta = tonumber(job.args and job.args[1])
 
@@ -135,10 +170,15 @@ local function get_cache_path(job, mode)
 	job.skip = 1000000 + cache_version
 	local base = ya.file_cache(job)
 	job.skip = skip
+
 	if not base then
-		return nil
+		return nil, nil
 	end
-	return Url(tostring(base) .. "_" .. mode .. ".parquet")
+
+	local base_str = tostring(base) .. "_" .. mode .. ".parquet"
+	local path_url = Url(base_str)
+	local path_str = tostring(path_url.name)
+	return path_str, path_url
 end
 
 local extension_map = {
@@ -217,6 +257,9 @@ local function run_query(job, query, target, file_type)
 		return nil
 	end
 
+	ya.dbg("stdout: " .. (output.stdout or "[no stdout]"))
+	ya.dbg("stderr: " .. (output.stderr or "[no stderr]"))
+	ya.dbg("status: " .. tostring(output.status.success))
 	return output
 end
 
@@ -429,19 +472,36 @@ function M:preload(job)
 	if file_type == "duckdb" then
 		return true
 	end
+
+	local preload_paths = {}
+
+	-- First loop: register both for preload
 	for _, mode in ipairs({ "standard", "summarized" }) do
-		local path = get_cache_path(job, mode)
-		if path and not fs.cha(path) then
-			-- brief sleep to avoid blocking peek call when entering dir for first time.
-			ya.sleep(0.1)
-			create_cache(job, mode, path, file_type)
+		local path_str, path_url = get_cache_path(job, mode)
+		if path_url and not fs.cha(path_url) then
+			add_to_preload_list(path_str)
+			preload_paths[#preload_paths + 1] = {
+				mode = mode,
+				path_str = path_str,
+				path_url = path_url,
+			}
 		end
 	end
+
+	-- Second loop: create caches and remove from preload
+	for _, entry in ipairs(preload_paths) do
+		-- Optional: small sleep before creating to avoid blocking other operations
+		create_cache(job, entry.mode, entry.path_url, file_type)
+		remove_from_preload_list(entry.path_str)
+	end
+
 	return true
 end
 
 -- Peek with mode toggle if scrolling at top
 function M:peek(job)
+	local file_url = job.file.url
+
 	local raw_skip = job.skip or 0
 	if raw_skip == 0 then
 		set_state("scrolled_columns", 0)
@@ -454,11 +514,14 @@ function M:peek(job)
 	job.skip = skip
 
 	local mode = get_state("mode")
-	local file_url = job.file.url
 	local file_type = check_file_type(file_url)
 
-	local cache = get_cache_path(job, mode)
-	local target = (cache and fs.cha(cache)) and cache or file_url
+	local cache_str, cache_url = get_cache_path(job, mode)
+	ya.dbg("checking preload list for: " .. cache_str)
+
+	local use_cache = cache_url and fs.cha(cache_url) and not is_file_preloading(cache_str)
+	local target = use_cache and cache_url or file_url
+	ya.dbg("target : " .. tostring(target.name))
 
 	local limit = job.area.h - 7
 	local offset = skip
@@ -474,6 +537,7 @@ function M:peek(job)
 
 		if target ~= file_url then
 			target = file_url
+			-- TODO: needs to use full summarized query
 			query = generate_peek_query(target, job, limit, offset, file_type)
 			output = run_query(job, query, target, file_type)
 			if not output then
@@ -487,6 +551,21 @@ function M:peek(job)
 		end
 	end
 
+	if target == file_url and not use_cache then
+		ya.dbg("stdout: " .. tostring(output.stdout))
+		ya.preview_widgets(job, {
+			ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
+		})
+		ya.dbg("checking preload list for: " .. tostring(cache_url.name))
+		while not is_cache_completed(cache_str) do
+			ya.sleep(0.2)
+		end
+		ya.dbg("file had stopped preloading")
+		remove_from_cache_completed_list(cache_str)
+		return require("duckdb"):peek(job)
+	end
+	ya.dbg("stdout: " .. tostring(output.stdout))
+	ya.dbg("stderr: " .. tostring(output.stderr))
 	ya.preview_widgets(job, {
 		ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
 	})
