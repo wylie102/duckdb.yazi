@@ -53,7 +53,10 @@ local function generate_preload_query(job, mode)
 	if mode == "standard" then
 		return string.format("FROM '%s' LIMIT 500", tostring(job.file.url))
 	else
-		return string.format("SELECT * FROM (SUMMARIZE FROM '%s')", tostring(job.file.url))
+		return string.format(
+			"SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage FROM (SUMMARIZE FROM '%s')",
+			tostring(job.file.url)
+		)
 	end
 end
 
@@ -70,7 +73,6 @@ SELECT
 	LEFT(min, %d) AS min,
 	LEFT(max, %d) AS max,
 	CASE
-		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
 		WHEN avg IS NULL THEN NULL
 		WHEN TRY_CAST(avg AS DOUBLE) IS NULL THEN CAST(avg AS VARCHAR)
 		WHEN CAST(avg AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(avg AS DOUBLE), 2) AS VARCHAR)
@@ -80,7 +82,6 @@ SELECT
 		ELSE '∞'
 	END AS avg,
 	CASE
-		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
 		WHEN std IS NULL THEN NULL
 		WHEN TRY_CAST(std AS DOUBLE) IS NULL THEN CAST(std AS VARCHAR)
 		WHEN CAST(std AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(std AS DOUBLE), 2) AS VARCHAR)
@@ -90,8 +91,8 @@ SELECT
 		ELSE '∞'
 	END AS std,
 	CASE
-		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
 		WHEN q25 IS NULL THEN NULL
+    WHEN column_type = 'TIMESTAMP' THEN coalesce(strftime(try_strptime(q25::VARCHAR, '%%c.%%f'), '%%c'), q25::VARCHAR)
 		WHEN TRY_CAST(q25 AS DOUBLE) IS NULL THEN CAST(q25 AS VARCHAR)
 		WHEN CAST(q25 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q25 AS DOUBLE), 2) AS VARCHAR)
 		WHEN CAST(q25 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q25 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
@@ -100,8 +101,8 @@ SELECT
 		ELSE '∞'
 	END AS q25,
 	CASE
-		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
 		WHEN q50 IS NULL THEN NULL
+    WHEN column_type = 'TIMESTAMP' THEN coalesce(strftime(try_strptime(q50::VARCHAR, '%%c.%%f'), '%%c'), q50::VARCHAR)
 		WHEN TRY_CAST(q50 AS DOUBLE) IS NULL THEN CAST(q50 AS VARCHAR)
 		WHEN CAST(q50 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q50 AS DOUBLE), 2) AS VARCHAR)
 		WHEN CAST(q50 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q50 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
@@ -110,8 +111,8 @@ SELECT
 		ELSE '∞'
 	END AS q50,
 	CASE
-		WHEN column_type IN ('TIMESTAMP', 'DATE') THEN '-'
 		WHEN q75 IS NULL THEN NULL
+    WHEN column_type = 'TIMESTAMP' THEN coalesce(strftime(try_strptime(q75::VARCHAR, '%%c.%%f'), '%%c'), q75::VARCHAR)
 		WHEN TRY_CAST(q75 AS DOUBLE) IS NULL THEN CAST(q75 AS VARCHAR)
 		WHEN CAST(q75 AS DOUBLE) < 100000 THEN CAST(ROUND(CAST(q75 AS DOUBLE), 2) AS VARCHAR)
 		WHEN CAST(q75 AS DOUBLE) < 1000000 THEN CAST(ROUND(CAST(q75 AS DOUBLE) / 1000, 1) AS VARCHAR) || 'k'
@@ -129,7 +130,7 @@ end
 
 -- Get preview cache path
 local function get_cache_path(job, mode)
-	local cache_version = 2
+	local cache_version = 3
 	local skip = job.skip
 	job.skip = 1000000 + cache_version
 	local base = ya.file_cache(job)
