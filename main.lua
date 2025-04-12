@@ -3,50 +3,40 @@
 -- TODO: look at preserving current skip position when re-peeking
 local M = {}
 
-local set_state = ya.sync(function(state, key, value)
-	state.opts = state.opts or {}
-	state.opts[key] = value
+local update_state = ya.sync(function(state, action, category, key, value)
+	-- Ensure the subtable for the category exists.
+	state[category] = state[category] or {}
+
+	if action == "set" then
+		state[category][key] = value
+	elseif action == "get" then
+		return state[category][key]
+	elseif action == "check" then
+		return state[category][key] ~= nil
+	else
+		error("Unknown action: " .. tostring(action))
+	end
 end)
 
-local get_state = ya.sync(function(state, key)
-	state.opts = state.opts or {}
-	return state.opts[key]
-end)
+local function set_opts(key, value)
+	update_state("set", "opts", key, value)
+end
 
-local add_to_cache_completed_list = ya.sync(function(state, cache_str)
-	ya.dbg("adding to completed list: " .. cache_str)
-	state.completed = state.completed or {}
-	state.completed[cache_str] = true
-end)
+local function get_opts(key)
+	return update_state("get", "opts", key)
+end
 
-local remove_from_cache_completed_list = ya.sync(function(state, cache_str)
-	ya.dbg("removing from completed list: " .. cache_str)
-	state.completed = state.completed or {}
-	state.completed[cache_str] = nil
-end)
+local function add_to_list(category, cache_str)
+	update_state("set", category, cache_str, true)
+end
 
-local is_cache_completed = ya.sync(function(state, cache_str)
-	local list = state.completed or {}
-	return list[cache_str] == true
-end)
+local function remove_from_list(category, cache_str)
+	update_state("set", category, cache_str, nil)
+end
 
-local add_to_preload_list = ya.sync(function(state, cache_str)
-	ya.dbg("adding to preload list: " .. cache_str)
-	state.preloading = state.preloading or {}
-	state.preloading[cache_str] = true
-end)
-
-local remove_from_preload_list = ya.sync(function(state, cache_str)
-	ya.dbg("removing from preload list: " .. cache_str)
-	state.preloading = state.preloading or {}
-	state.preloading[cache_str] = nil
-	add_to_cache_completed_list(cache_str)
-end)
-
-local is_file_preloading = ya.sync(function(state, cache_path)
-	local list = state.preloading or {}
-	return list[cache_path] == true
-end)
+local function is_on_list(category, cache_str)
+	return update_state("check", category, cache_str)
+end
 
 function M:entry(job)
 	local scroll_delta = tonumber(job.args and job.args[1])
@@ -56,9 +46,9 @@ function M:entry(job)
 		return
 	end
 
-	local scrolled_columns = get_state("scrolled_columns") or 0
+	local scrolled_columns = get_opts("scrolled_columns") or 0
 	scrolled_columns = math.max(0, scrolled_columns + scroll_delta)
-	set_state("scrolled_columns", scrolled_columns)
+	set_opts("scrolled_columns", scrolled_columns)
 
 	ya.manager_emit("seek", { "lateral scroll" })
 end
@@ -76,13 +66,13 @@ function M:setup(opts)
 	end
 	local column_fit_factor = opts.column_fit_factor or 10
 
-	set_state("mode", mode)
-	set_state("mode_changed", false)
-	set_state("os", os)
-	set_state("column_width", column_width)
-	set_state("row_id", row_id)
-	set_state("scrolled_columns", 0)
-	set_state("column_fit_factor", column_fit_factor)
+	set_opts("mode", mode)
+	set_opts("mode_changed", false)
+	set_opts("os", os)
+	set_opts("column_width", column_width)
+	set_opts("row_id", row_id)
+	set_opts("scrolled_columns", 0)
+	set_opts("column_fit_factor", column_fit_factor)
 end
 
 local function generate_preload_query(job, mode)
@@ -97,7 +87,7 @@ local function generate_preload_query(job, mode)
 end
 
 local function generate_summary_cte(target)
-	local column_width = get_state("column_width")
+	local column_width = get_opts("column_width")
 	return string.format(
 		[[
 SELECT
@@ -278,7 +268,7 @@ local function create_cache(job, mode, path, file_type)
 end
 
 local function generate_db_query(limit, offset)
-	local scroll = get_state("scrolled_columns") or 0
+	local scroll = get_opts("scrolled_columns") or 0
 
 	local metadata_fields = { "rows", "columns", "has_pk", "indexes" }
 	local visible_column_count = 10
@@ -356,12 +346,12 @@ LIMIT %d OFFSET %d;
 end
 
 local function generate_standard_query(target, job, limit, offset)
-	local scroll = get_state("scrolled_columns") or 0
+	local scroll = get_opts("scrolled_columns") or 0
 	local args = {}
 	local actual_width = math.max((job.area and job.area.w or 80), 80)
-	local column_fit_factor = get_state("column_fit_factor") or 7
+	local column_fit_factor = get_opts("column_fit_factor") or 7
 	local fetched_columns = math.floor(actual_width / column_fit_factor) + scroll
-	local row_id_mode = get_state("row_id")
+	local row_id_mode = get_opts("row_id")
 
 	-- Determine if row_id should be prepended
 	local row_id_prefix = ""
@@ -403,7 +393,7 @@ set variable included_columns = (
 end
 
 local function generate_summarized_query(source, limit, offset)
-	local scroll = get_state("scrolled_columns") or 0
+	local scroll = get_opts("scrolled_columns") or 0
 
 	-- These are the scrollable fields, in display order
 	local fields = {
@@ -446,7 +436,7 @@ SELECT %s FROM summary_cte LIMIT %d OFFSET %d;
 end
 
 local function generate_peek_query(target, job, limit, offset, file_type)
-	local mode = get_state("mode")
+	local mode = get_opts("mode")
 	local is_original_file = (target == job.file.url)
 
 	-- If the file itself is a DuckDB database, list tables/columns
@@ -527,7 +517,7 @@ function M:preload(job)
 	for _, mode in ipairs({ "standard", "summarized" }) do
 		local path_str, path_url = get_cache_path(job, mode)
 		if path_url and not fs.cha(path_url) then
-			add_to_preload_list(path_str)
+			add_to_list("preloading", path_str)
 			preload_paths[#preload_paths + 1] = {
 				mode = mode,
 				path_str = path_str,
@@ -540,7 +530,8 @@ function M:preload(job)
 	for _, entry in ipairs(preload_paths) do
 		-- Optional: small sleep before creating to avoid blocking other operations
 		create_cache(job, entry.mode, entry.path_url, file_type)
-		remove_from_preload_list(entry.path_str)
+		remove_from_list("preloading", entry.path_str)
+		add_to_list("completed", entry.path_str)
 	end
 
 	return true
@@ -552,22 +543,22 @@ function M:peek(job)
 
 	local raw_skip = job.skip or 0
 	if raw_skip == 0 then
-		set_state("scrolled_columns", 0)
+		set_opts("scrolled_columns", 0)
 	end
-	if get_state("mode_changed") then
-		set_state("scrolled_columns", 0)
-		set_state("mode_changed", false)
+	if get_opts("mode_changed") then
+		set_opts("scrolled_columns", 0)
+		set_opts("mode_changed", false)
 	end
 	local skip = math.max(0, raw_skip - 50)
 	job.skip = skip
 
-	local mode = get_state("mode")
+	local mode = get_opts("mode")
 	local file_type = check_file_type(file_url)
 
 	local cache_str, cache_url = get_cache_path(job, mode)
 	ya.dbg("checking preload list for: " .. cache_str)
 
-	local use_cache = cache_url and fs.cha(cache_url) and not is_file_preloading(cache_str)
+	local use_cache = cache_url and fs.cha(cache_url) and not is_on_list("preloading", cache_str)
 	local target = use_cache and cache_url or file_url
 	ya.dbg("target : " .. tostring(target.name))
 
@@ -608,11 +599,11 @@ function M:peek(job)
 			ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
 		})
 		ya.dbg("checking preload list for: " .. tostring(cache_url.name))
-		while not is_cache_completed(cache_str) do
+		while not is_on_list("completed", cache_str) do
 			ya.sleep(0.2)
 		end
 		ya.dbg("file had stopped preloading")
-		remove_from_cache_completed_list(cache_str)
+		remove_from_list("completed", cache_str)
 		return require("duckdb"):peek(job)
 	end
 	ya.dbg("stdout: " .. tostring(output.stdout))
@@ -631,10 +622,10 @@ function M:seek(job)
 
 	if new_skip < 0 then
 		-- Toggle preview mode
-		local mode = get_state("mode")
+		local mode = get_opts("mode")
 		local new_mode = (mode == "summarized") and "standard" or "summarized"
-		set_state("mode", new_mode)
-		set_state("mode_changed", true)
+		set_opts("mode", new_mode)
+		set_opts("mode_changed", true)
 		-- Trigger re-peek
 		ya.manager_emit("peek", { OFFSET_BASE, only_if = job.file.url })
 	else
