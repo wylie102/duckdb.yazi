@@ -159,6 +159,10 @@ local function run_query(job, query, target)
 
 	-- Duckbox config
 	table.insert(args, "-c")
+	table.insert(args, ".mode duckbox")
+	table.insert(args, "-c")
+	table.insert(args, ".timer off")
+	table.insert(args, "-c")
 	table.insert(args, "SET enable_progress_bar = false;")
 	table.insert(args, "-c")
 	table.insert(args, string.format(".maxwidth %d", width))
