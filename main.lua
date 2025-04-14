@@ -68,6 +68,7 @@ function M:setup(opts)
 
 	set_opts("mode", mode)
 	set_opts("mode_changed", false)
+	set_opts("re_peek", false)
 	set_opts("os", os)
 	set_opts("column_width", column_width)
 	set_opts("row_id", row_id)
@@ -248,6 +249,8 @@ local function run_query(job, query, target, file_type)
 		return nil
 	end
 
+	ya.dbg("stdout: " .. tostring(output.stdout))
+	ya.dbg("stderr: " .. tostring(output.stderr))
 	return output
 end
 
@@ -541,16 +544,19 @@ end
 function M:peek(job)
 	local file_url = job.file.url
 
-	local raw_skip = job.skip or 0
-	if raw_skip == 0 then
-		set_opts("scrolled_columns", 0)
+	if not get_opts("re_peek") then
+		local raw_skip = job.skip or 0
+		if raw_skip == 0 then
+			set_opts("scrolled_columns", 0)
+		end
+		if get_opts("mode_changed") then
+			set_opts("scrolled_columns", 0)
+			set_opts("mode_changed", false)
+		end
+		local skip = math.max(0, raw_skip - 50)
+		job.skip = skip
 	end
-	if get_opts("mode_changed") then
-		set_opts("scrolled_columns", 0)
-		set_opts("mode_changed", false)
-	end
-	local skip = math.max(0, raw_skip - 50)
-	job.skip = skip
+	set_opts("re_peek", false)
 
 	local mode = get_opts("mode")
 	local file_type = check_file_type(file_url)
@@ -563,7 +569,7 @@ function M:peek(job)
 	ya.dbg("target : " .. tostring(target.name))
 
 	local limit = job.area.h - 7
-	local offset = skip
+	local offset = job.skip
 
 	local query = generate_peek_query(target, job, limit, offset, file_type)
 	local output = run_query(job, query, target, file_type)
@@ -604,6 +610,7 @@ function M:peek(job)
 		end
 		ya.dbg("file had stopped preloading")
 		remove_from_list("completed", cache_str)
+		set_opts("re_peek", true)
 		return require("duckdb"):peek(job)
 	end
 	ya.dbg("stdout: " .. tostring(output.stdout))
