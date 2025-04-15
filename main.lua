@@ -558,6 +558,7 @@ local function prepare_peek_context(job)
 
 	local file_type = check_file_type(file_url)
 	local cache_str, cache_url = get_cache_path(job, mode)
+	local scrolled_collumns = get_opts("scrolled_columns")
 
 	local use_cache = cache_url
 		and fs.cha(cache_url)
@@ -575,6 +576,7 @@ local function prepare_peek_context(job)
 		file_type = file_type,
 		cache_str = cache_str,
 		cache_url = cache_url,
+		scrolled_collumns = scrolled_collumns,
 		use_cache = use_cache,
 		target = target,
 		limit = limit,
@@ -664,7 +666,7 @@ function M:peek(job)
 	local query = generate_peek_query(peek.target, job, peek.limit, peek.offset, peek.file_type, peek.cache_str)
 	local output = run_query(job, query, peek.target, peek.file_type)
 	if not output_is_valid(output, peek.mode, job) then
-		if peek.target ~= peek.file_url then
+		if peek.target == peek.cache_url and peek.scrolled_collumns == 0 then
 			add_to_list("bad_cache", peek.cache_str)
 			remove_file(peek.cache_url)
 			return require("duckdb"):peek(job)
@@ -673,7 +675,7 @@ function M:peek(job)
 		end
 	end
 
-	if peek.target == peek.file_url and not peek.use_cache and peek.mode == "summarized" then
+	if peek.target == peek.file_url and peek.mode == "summarized" and not peek.use_cache then
 		render_output(output, job)
 		while not is_on_list("completed", peek.cache_str) do
 			ya.sleep(0.2)
