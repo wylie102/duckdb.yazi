@@ -513,6 +513,13 @@ local function generate_peek_query(target, job, limit, offset, file_type, cache_
 	end
 end
 
+local function render_output(output, job)
+	local cleaned = output.stdout and output.stdout:gsub("\r", "") or "[no output]"
+	ya.preview_widgets(job, {
+		ui.Text.parse(cleaned):area(job.area),
+	})
+end
+
 local function output_is_valid(output, mode, job)
 	if output then
 		if output.stderr and output.stderr ~= "" then
@@ -528,6 +535,51 @@ local function output_is_valid(output, mode, job)
 		ya.err("Duckdb failed to return output")
 		return false
 	end
+end
+
+local function prepare_peek_context(job)
+	local file_url = job.file.url
+	local re_peek = get_opts("re_peek")
+	local mode = get_opts("mode")
+	local mode_changed = get_opts("mode_changed")
+
+	-- Handle scroll reset and peek triggering
+	if not re_peek then
+		local raw_skip = job.skip or 0
+		if raw_skip == 0 or mode_changed then
+			set_opts("scrolled_columns", 0)
+		end
+		if mode_changed then
+			set_opts("mode_changed", false)
+		end
+		job.skip = math.max(0, raw_skip - 50)
+	end
+	set_opts("re_peek", false)
+
+	local file_type = check_file_type(file_url)
+	local cache_str, cache_url = get_cache_path(job, mode)
+
+	local use_cache = cache_url
+		and fs.cha(cache_url)
+		and not is_on_list("preloading", cache_str)
+		and not is_on_list("bad_cache", cache_str)
+
+	local target = use_cache and cache_url or file_url
+	local area = job.area or { h = 25 }
+	local limit = area.h - 7
+	local offset = job.skip
+
+	return {
+		file_url = file_url,
+		mode = mode,
+		file_type = file_type,
+		cache_str = cache_str,
+		cache_url = cache_url,
+		use_cache = use_cache,
+		target = target,
+		limit = limit,
+		offset = offset,
+	}
 end
 
 local function remove_file(cache_url)
@@ -608,53 +660,22 @@ end
 
 -- Peek with mode toggle if scrolling at top
 function M:peek(job)
-	local file_url = job.file.url
-
-	if not get_opts("re_peek") then
-		local raw_skip = job.skip or 0
-		if raw_skip == 0 then
-			set_opts("scrolled_columns", 0)
-		end
-		if get_opts("mode_changed") then
-			set_opts("scrolled_columns", 0)
-			set_opts("mode_changed", false)
-		end
-		local skip = math.max(0, raw_skip - 50)
-		job.skip = skip
-	end
-	set_opts("re_peek", false)
-
-	local mode = get_opts("mode")
-	local file_type = check_file_type(file_url)
-
-	local cache_str, cache_url = get_cache_path(job, mode)
-
-	local use_cache = cache_url
-		and fs.cha(cache_url)
-		and not is_on_list("preloading", cache_str)
-		and not is_on_list("bad_cache", cache_str)
-	local target = use_cache and cache_url or file_url
-
-	local limit = job.area.h - 7
-	local offset = job.skip
-
-	local query = generate_peek_query(target, job, limit, offset, file_type, cache_str)
-	local output = run_query(job, query, target, file_type)
-	if not output_is_valid(output, mode, job) then
-		if target ~= file_url then
-			add_to_list("bad_cache", cache_str)
-			remove_file(cache_url)
+	local peek = prepare_peek_context(job)
+	local query = generate_peek_query(peek.target, job, peek.limit, peek.offset, peek.file_type, peek.cache_str)
+	local output = run_query(job, query, peek.target, peek.file_type)
+	if not output_is_valid(output, peek.mode, job) then
+		if peek.target ~= peek.file_url then
+			add_to_list("bad_cache", peek.cache_str)
+			remove_file(peek.cache_url)
 			return require("duckdb"):peek(job)
-		elseif is_on_list("bad_cache", cache_str) then
+		elseif is_on_list("bad_cache", peek.cache_str) then
 			return require("code"):peek(job)
 		end
 	end
 
-	if target == file_url and not use_cache and mode == "summarized" then
-		ya.preview_widgets(job, {
-			ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
-		})
-		while not is_on_list("completed", cache_str) do
+	if peek.target == peek.file_url and not peek.use_cache and peek.mode == "summarized" then
+		render_output(output, job)
+		while not is_on_list("completed", peek.cache_str) do
 			ya.sleep(0.2)
 		end
 		clear_list("completed")
@@ -662,9 +683,7 @@ function M:peek(job)
 		return require("duckdb"):peek(job)
 	end
 
-	ya.preview_widgets(job, {
-		ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
-	})
+	render_output(output, job)
 end
 
 -- Seek, also triggers mode change if skip negative.
