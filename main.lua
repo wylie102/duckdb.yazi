@@ -13,7 +13,7 @@ local update_state = ya.sync(function(state, action, category, key, value)
 	elseif action == "check" then
 		return state[category][key] ~= nil
 	else
-		error("Unknown action: " .. tostring(action))
+		ya.err("Unknown action: " .. tostring(action))
 	end
 end)
 
@@ -37,6 +37,10 @@ local function is_on_list(category, cache_str)
 	return update_state("check", category, cache_str)
 end
 
+local function clear_list(category)
+	set_opts(category, {}) -- replaces the whole list with an empty table
+end
+
 function M:entry(job)
 	local scroll_delta = tonumber(job.args and job.args[1])
 
@@ -57,7 +61,7 @@ function M:setup(opts)
 	opts = opts or {}
 
 	local mode = opts.mode or "summarized"
-	local os = ya.target_os()
+	local operating_system = ya.target_os()
 	local column_width = opts.minmax_column_width or 21
 	local row_id = opts.row_id
 	if row_id == nil then
@@ -68,7 +72,7 @@ function M:setup(opts)
 	set_opts("mode", mode)
 	set_opts("mode_changed", false)
 	set_opts("re_peek", false)
-	set_opts("os", os)
+	set_opts("os", operating_system)
 	set_opts("column_width", column_width)
 	set_opts("row_id", row_id)
 	set_opts("scrolled_columns", 0)
@@ -251,21 +255,6 @@ local function run_query(job, query, target, file_type)
 	return output
 end
 
-local function create_cache(job, mode, path, file_type)
-	if fs.cha(path) then
-		return true
-	end
-
-	local base_query = generate_preload_query(job, mode)
-	local out = run_query(
-		job,
-		string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, tostring(path)),
-		job.file.url,
-		file_type
-	)
-	return out ~= nil
-end
-
 local function generate_db_query(limit, offset)
 	local scroll = get_opts("scrolled_columns") or 0
 
@@ -434,7 +423,7 @@ SELECT %s FROM summary_cte LIMIT %d OFFSET %d;
 	)
 end
 
-local function generate_peek_query(target, job, limit, offset, file_type)
+local function generate_peek_query(target, job, limit, offset, file_type, cache_str)
 	local mode = get_opts("mode")
 	local is_original_file = (target == job.file.url)
 
@@ -448,6 +437,10 @@ local function generate_peek_query(target, job, limit, offset, file_type)
 	if mode == "standard" then
 		return generate_standard_query(source, job, limit, offset)
 	end
+	local placeholder = "⏱"
+	if is_on_list("bad_cache", cache_str) then
+		placeholder = "∅"
+	end
 
 	if file_type ~= "parquet" then
 		local summary_source = is_original_file
@@ -455,18 +448,27 @@ local function generate_peek_query(target, job, limit, offset, file_type)
 					[[(select
           column_name,
           column_type,
-          '   ⏱ ' as count,
-          '   ⏱ ' as "approx_unique",
-          '   ⏱ ' as "null_percentage",
-          '   ⏱ ' as min,
-          '   ⏱ ' as max,
-          '   ⏱ ' as avg,
-          '   ⏱ ' as std,
-          '   ⏱ ' as q25,
-          '   ⏱ ' as q50,
-          '   ⏱ ' as q75
+          '   %s ' as count,
+          '   %s ' as "approx_unique",
+          '   %s ' as "null_percentage",
+          '   %s ' as min,
+          '   %s ' as max,
+          '   %s ' as avg,
+          '   %s ' as std,
+          '   %s ' as q25,
+          '   %s ' as q50,
+          '   %s ' as q75
           from (describe select * from %s))]],
-					source,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
 					source
 				)
 			or source
@@ -479,27 +481,151 @@ local function generate_peek_query(target, job, limit, offset, file_type)
         d.column_name,
         d.column_type,
         sum(m.num_values) as count,
-        '   ⏱ ' as "approx_unique",
-        '   ⏱ ' as "null_percentage",
-        case when min(m.stats_min) is null then '   ⏱ ' else min(m.stats_min) end as min,
-        case when min(m.stats_max) is null then '   ⏱ ' else max(m.stats_max) end as max,
-        '   ⏱ ' as "avg",
-        '   ⏱ ' as "std",
-        '   ⏱ ' as q25,
-        '   ⏱ ' as q50,
-        '   ⏱ ' as q75
+        '   %s ' as "approx_unique",
+        '   %s ' as "null_percentage",
+        case when min(m.stats_min) is null then '%s' else min(m.stats_min) end as min,
+        case when min(m.stats_max) is null then '%s' else max(m.stats_max) end as max,
+        '   %s ' as "avg",
+        '   %s ' as "std",
+        '   %s ' as q25,
+        '   %s ' as q50,
+        '   %s ' as q75
         from (describe select * from %s) d 
         left join parquet_metadata(%s) m 
         on d.column_name = m.path_in_schema
         group by all
         order by min(column_id))
         ]],
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
+					placeholder,
 					source,
 					source
 				)
 			or source
 		return generate_summarized_query(summary_source, limit, offset)
 	end
+end
+
+local function render_output(output, job)
+	local cleaned = output.stdout and output.stdout:gsub("\r", "") or "[no output]"
+	ya.preview_widgets(job, {
+		ui.Text.parse(cleaned):area(job.area),
+	})
+end
+
+local function output_is_valid(output, mode, job)
+	if output then
+		if output.stderr and output.stderr ~= "" then
+			ya.err("DuckDB returned an error or:\n" .. output.stderr)
+			return false
+		elseif not output.stdout or output.stdout == "" then
+			ya.err(string.format("Peek - No stdout/stderr from %s cache for %s", mode, job.file.url))
+			return false
+		else
+			return true
+		end
+	else
+		ya.err("Duckdb failed to return output")
+		return false
+	end
+end
+
+local function prepare_peek_context(job)
+	local file_url = job.file.url
+	local re_peek = get_opts("re_peek")
+	local mode = get_opts("mode")
+	local mode_changed = get_opts("mode_changed")
+
+	-- Handle scroll reset and peek triggering
+	if not re_peek then
+		local raw_skip = job.skip or 0
+		if raw_skip == 0 or mode_changed then
+			set_opts("scrolled_columns", 0)
+		end
+		if mode_changed then
+			set_opts("mode_changed", false)
+		end
+		job.skip = math.max(0, raw_skip - 50)
+	end
+	set_opts("re_peek", false)
+
+	local file_type = check_file_type(file_url)
+	local cache_str, cache_url = get_cache_path(job, mode)
+
+	local use_cache = cache_url
+		and fs.cha(cache_url)
+		and not is_on_list("preloading", cache_str)
+		and not is_on_list("bad_cache", cache_str)
+
+	local target = use_cache and cache_url or file_url
+	local area = job.area or { h = 25 }
+	local limit = area.h - 7
+	local offset = job.skip
+
+	return {
+		file_url = file_url,
+		mode = mode,
+		file_type = file_type,
+		cache_str = cache_str,
+		cache_url = cache_url,
+		use_cache = use_cache,
+		target = target,
+		limit = limit,
+		offset = offset,
+	}
+end
+
+local function remove_file(cache_url)
+	if fs.cha(cache_url) then
+		local ok, err = fs.remove("file", cache_url)
+		if not ok then
+			ya.err(
+				string.format("[duckdb] failed to remove partial cache at %s: %s", tostring(cache_url), tostring(err))
+			)
+		end
+	end
+end
+
+local function create_cache(job, mode, cache_url, file_type)
+	local base_query = generate_preload_query(job, mode)
+	local output = run_query(
+		job,
+		string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, tostring(cache_url)),
+		job.file.url,
+		file_type
+	)
+
+	if not output or (output.stderr and output.stderr ~= "") then
+		-- Log error message
+		if not output then
+			ya.err(
+				string.format(
+					"[duckdb] no output returned while creating %s cache for %s",
+					mode,
+					tostring(job.file.url)
+				)
+			)
+		else
+			ya.err(
+				string.format(
+					"[duckdb] error creating %s cache for %s: %s",
+					mode,
+					tostring(job.file.url),
+					output.stderr
+				)
+			)
+		end
+		remove_file(cache_url)
+		return false
+	end
+	return true
 end
 
 -- Preload summarized and standard preview caches
@@ -509,96 +635,55 @@ function M:preload(job)
 		return true
 	end
 
-	local preload_paths = {}
+	local all_done = true
 
 	for _, mode in ipairs({ "standard", "summarized" }) do
-		local path_str, path_url = get_cache_path(job, mode)
-		if path_url and not fs.cha(path_url) then
-			add_to_list("preloading", path_str)
-			preload_paths[#preload_paths + 1] = {
-				mode = mode,
-				path_str = path_str,
-				path_url = path_url,
-			}
+		local cache_str, cache_url = get_cache_path(job, mode)
+
+		if cache_url and not fs.cha(cache_url) and not is_on_list("bad_cache", cache_str) then
+			-- Cache doesn't exist, so create it
+			add_to_list("preloading", cache_str)
+
+			local success = create_cache(job, mode, cache_url, file_type)
+
+			remove_from_list("preloading", cache_str)
+			add_to_list("completed", cache_str)
+			if not success then
+				add_to_list("bad_cache", cache_str)
+				all_done = false
+			end
 		end
 	end
 
-	for _, entry in ipairs(preload_paths) do
-		create_cache(job, entry.mode, entry.path_url, file_type)
-		remove_from_list("preloading", entry.path_str)
-		add_to_list("completed", entry.path_str)
-	end
-
-	return true
+	return all_done
 end
 
 -- Peek with mode toggle if scrolling at top
 function M:peek(job)
-	local file_url = job.file.url
-
-	if not get_opts("re_peek") then
-		local raw_skip = job.skip or 0
-		if raw_skip == 0 then
-			set_opts("scrolled_columns", 0)
-		end
-		if get_opts("mode_changed") then
-			set_opts("scrolled_columns", 0)
-			set_opts("mode_changed", false)
-		end
-		local skip = math.max(0, raw_skip - 50)
-		job.skip = skip
-	end
-	set_opts("re_peek", false)
-
-	local mode = get_opts("mode")
-	local file_type = check_file_type(file_url)
-
-	local cache_str, cache_url = get_cache_path(job, mode)
-
-	local use_cache = cache_url and fs.cha(cache_url) and not is_on_list("preloading", cache_str)
-	local target = use_cache and cache_url or file_url
-
-	local limit = job.area.h - 7
-	local offset = job.skip
-
-	local query = generate_peek_query(target, job, limit, offset, file_type)
-	local output = run_query(job, query, target, file_type)
-	if not output then
-		if output and output.stdout then
-			ya.err("DuckDB returned an error or invalid output:\n" .. output.stdout)
-		else
-			ya.err("Peek - No output from cache.")
-		end
-
-		if target ~= file_url then
-			target = file_url
-			query = generate_peek_query(target, job, limit, offset, file_type)
-			output = run_query(job, query, target, file_type)
-			if not output then
-				if output and output.stdout then
-					ya.err("Fallback DuckDB output:\n" .. output.stdout)
-				end
-				return require("code"):peek(job)
-			end
-		else
+	local peek = prepare_peek_context(job)
+	local query = generate_peek_query(peek.target, job, peek.limit, peek.offset, peek.file_type, peek.cache_str)
+	local output = run_query(job, query, peek.target, peek.file_type)
+	if not output_is_valid(output, peek.mode, job) then
+		if peek.target ~= peek.file_url then
+			add_to_list("bad_cache", peek.cache_str)
+			remove_file(peek.cache_url)
+			return require("duckdb"):peek(job)
+		elseif is_on_list("bad_cache", peek.cache_str) then
 			return require("code"):peek(job)
 		end
 	end
 
-	if target == file_url and not use_cache and mode == "summarized" then
-		ya.preview_widgets(job, {
-			ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
-		})
-		while not is_on_list("completed", cache_str) do
+	if peek.target == peek.file_url and not peek.use_cache and peek.mode == "summarized" then
+		render_output(output, job)
+		while not is_on_list("completed", peek.cache_str) do
 			ya.sleep(0.2)
 		end
-		remove_from_list("completed", cache_str)
+		clear_list("completed")
 		set_opts("re_peek", true)
 		return require("duckdb"):peek(job)
 	end
-	ya.preview_widgets(job, {
-		ui.Text.parse(output.stdout:gsub("\r", "")):area(job.area),
-	})
+
+	render_output(output, job)
 end
 
 -- Seek, also triggers mode change if skip negative.
