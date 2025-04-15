@@ -13,7 +13,7 @@ local update_state = ya.sync(function(state, action, category, key, value)
 	elseif action == "check" then
 		return state[category][key] ~= nil
 	else
-		error("Unknown action: " .. tostring(action))
+		ya.err("Unknown action: " .. tostring(action))
 	end
 end)
 
@@ -252,18 +252,54 @@ local function run_query(job, query, target, file_type)
 end
 
 local function create_cache(job, mode, path, file_type)
-	if fs.cha(path) then
-		return true
-	end
-
 	local base_query = generate_preload_query(job, mode)
-	local out = run_query(
+	local output = run_query(
 		job,
 		string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, tostring(path)),
 		job.file.url,
 		file_type
 	)
-	return out ~= nil
+
+	if not output or (output.stderr and output.stderr ~= "") then
+		-- Log error message
+		if not output then
+			ya.err(
+				string.format(
+					"[duckdb] no output returned while creating %s cache for %s",
+					mode,
+					tostring(job.file.url)
+				)
+			)
+		else
+			ya.err(
+				string.format(
+					"[duckdb] error creating %s cache for %s: %s",
+					mode,
+					tostring(job.file.url),
+					output.stderr
+				)
+			)
+		end
+
+		-- Clean up partial cache file
+		if fs.cha(path) then
+			local ok, err = fs.remove("file", path)
+			if not ok then
+				ya.err(
+					string.format(
+						"[duckdb] failed to remove partial %s cache at %s: %s",
+						mode,
+						tostring(path),
+						tostring(err)
+					)
+				)
+			end
+		end
+
+		return false
+	end
+
+	return true
 end
 
 local function generate_db_query(limit, offset)
@@ -509,27 +545,27 @@ function M:preload(job)
 		return true
 	end
 
-	local preload_paths = {}
+	local all_done = true
 
 	for _, mode in ipairs({ "standard", "summarized" }) do
 		local path_str, path_url = get_cache_path(job, mode)
+
 		if path_url and not fs.cha(path_url) then
+			-- Cache doesn't exist, so create it
 			add_to_list("preloading", path_str)
-			preload_paths[#preload_paths + 1] = {
-				mode = mode,
-				path_str = path_str,
-				path_url = path_url,
-			}
+
+			local success = create_cache(job, mode, path_url, file_type)
+
+			remove_from_list("preloading", path_str)
+			if success then
+				add_to_list("completed", path_str)
+			else
+				all_done = false
+			end
 		end
 	end
 
-	for _, entry in ipairs(preload_paths) do
-		create_cache(job, entry.mode, entry.path_url, file_type)
-		remove_from_list("preloading", entry.path_str)
-		add_to_list("completed", entry.path_str)
-	end
-
-	return true
+	return all_done
 end
 
 -- Peek with mode toggle if scrolling at top
