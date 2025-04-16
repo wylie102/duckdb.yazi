@@ -41,6 +41,18 @@ local function clear_list(category)
 	set_opts(category, {}) -- replaces the whole list with an empty table
 end
 
+local function add_queries_to_table(target_table, queries)
+	if type(queries) == "table" then
+		for _, item in ipairs(queries) do
+			table.insert(target_table, "-c")
+			table.insert(target_table, item)
+		end
+	else
+		table.insert(target_table, "-c")
+		table.insert(target_table, queries)
+	end
+end
+
 function M:entry(job)
 	local scroll_delta = tonumber(job.args and job.args[1])
 
@@ -68,6 +80,7 @@ function M:setup(opts)
 		row_id = false
 	end
 	local column_fit_factor = opts.column_fit_factor or 10
+	local limit = opts.cache_size or 500
 
 	set_opts("mode", mode)
 	set_opts("mode_changed", false)
@@ -77,15 +90,36 @@ function M:setup(opts)
 	set_opts("row_id", row_id)
 	set_opts("scrolled_columns", 0)
 	set_opts("column_fit_factor", column_fit_factor)
+	set_opts("limit", limit)
 end
 
-local function generate_preload_query(job, mode)
+local function generate_data_source_string(job, file_type)
+	local url_string = "'" .. tostring(job.file.url) .. "'"
+	if file_type == "excel" then
+		return string.format("read_xlsx(%s)", url_string)
+	elseif file_type == "excel_empty_as_varchar" then
+		return string.format("read_xlsx(%s, empty_as_varchar = true)", url_string)
+	elseif file_type == "excel_all_varchar" then
+		return string.format("read_xlsx(%s, all_varchar = true)", url_string)
+	elseif file_type == "text" then
+		return string.format("read_csv(%s)", url_string)
+	else
+		return url_string
+	end
+end
+
+local function generate_preload_query(job, mode, file_type, limit)
+	local data_source_string = generate_data_source_string(job, file_type)
+	local limit_string = ""
+	if limit then
+		limit_string = "LIMIT " .. tostring(limit)
+	end
 	if mode == "standard" then
-		return string.format("FROM '%s' LIMIT 500", tostring(job.file.url))
+		return "FROM " .. data_source_string .. limit_string
 	else
 		return string.format(
-			"SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage FROM (SUMMARIZE FROM '%s')",
-			tostring(job.file.url)
+			"SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage FROM (SUMMARIZE FROM %s)",
+			data_source_string
 		)
 	end
 end
@@ -158,24 +192,6 @@ FROM %s
 	)
 end
 
--- Get preview cache path
-local function get_cache_path(job, mode)
-	local cache_version = 3
-	local skip = job.skip
-	job.skip = 1000000 + cache_version
-	local base = ya.file_cache(job)
-	job.skip = skip
-
-	if not base then
-		return nil, nil
-	end
-
-	local base_str = tostring(base) .. "_" .. mode .. ".parquet"
-	local path_url = Url(base_str)
-	local path_str = tostring(path_url.name)
-	return path_str, path_url
-end
-
 local extension_map = {
 	csv = "csv",
 	tsv = "csv",
@@ -186,6 +202,28 @@ local extension_map = {
 	duckdb = "duckdb",
 	db = "duckdb",
 }
+
+-- Get preview cache path
+local function get_cache_path(job, mode, extension)
+	local suffix = "_" .. mode .. ".parquet"
+	if extension then
+		suffix = "_" .. extension .. "." .. extension
+	end
+	local cache_version = 3
+	local skip = job.skip
+	job.skip = 1000000 + cache_version
+	local base = ya.file_cache(job)
+	job.skip = skip
+
+	if not base then
+		return nil, nil
+	end
+
+	local base_str = tostring(base) .. suffix
+	local path_url = Url(base_str)
+	local path_str = tostring(path_url.name)
+	return path_str, path_url
+end
 
 local function get_extension(filename)
 	-- Match the last "dot + word characters" at the end of the string
@@ -217,28 +255,17 @@ local function run_query(job, query, target, file_type)
 	end
 
 	-- Duckbox config
-	table.insert(args, "-c")
-	table.insert(args, ".mode duckbox")
-	table.insert(args, "-c")
-	table.insert(args, ".timer off")
-	table.insert(args, "-c")
-	table.insert(args, "SET enable_progress_bar = false;")
-	table.insert(args, "-c")
-	table.insert(args, string.format(".maxwidth %d", width))
-	table.insert(args, "-c")
-	table.insert(args, string.format(".maxrows %d", height))
-	table.insert(args, "-c")
-	table.insert(args, ".highlight_results on")
+	add_queries_to_table(args, {
+		".mode duckbox",
+		".timer off",
+		"SET enable_progress_bar = false;",
+		string.format(".maxwidth %d", width),
+		string.format(".maxrows %d", height),
+		".highlight_results on",
+	})
 
-	-- Add query (string or list of -c args)
-	if type(query) == "table" then
-		for _, item in ipairs(query) do
-			table.insert(args, item)
-		end
-	else
-		table.insert(args, "-c")
-		table.insert(args, query)
-	end
+	-- Add query or list of queries
+	add_queries_to_table(args, query)
 
 	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 	if not child then
@@ -335,7 +362,6 @@ end
 
 local function generate_standard_query(target, job, limit, offset)
 	local scroll = get_opts("scrolled_columns") or 0
-	local args = {}
 	local actual_width = math.max((job.area and job.area.w or 80), 80)
 	local column_fit_factor = get_opts("column_fit_factor") or 7
 	local fetched_columns = math.floor(actual_width / column_fit_factor) + scroll
@@ -372,12 +398,7 @@ set variable included_columns = (
 		limit,
 		offset
 	)
-
-	table.insert(args, "-c")
-	table.insert(args, excluded_column_cte)
-	table.insert(args, "-c")
-	table.insert(args, filtered_select)
-	return args
+	return { excluded_column_cte, filtered_select }
 end
 
 local function generate_summarized_query(source, limit, offset)
@@ -595,65 +616,191 @@ local function remove_file(cache_url)
 	end
 end
 
-local function create_cache(job, mode, cache_url, file_type)
-	local base_query = generate_preload_query(job, mode)
-	local output = run_query(
-		job,
-		string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, tostring(cache_url)),
-		job.file.url,
-		file_type
-	)
+local function finish_preload(success, cache_str1, cache_str2)
+	for _, cache_str in ipairs({ cache_str1, cache_str2 }) do
+		if not success then
+			add_to_list("bad_cache", cache_str)
+		end
+		remove_from_list("preloading", cache_str)
+		add_to_list("completed", cache_str)
+	end
+	return success
+end
+
+local function create_cache(job, mode, file_type, limit)
+	local cache_str, cache_url = get_cache_path(job, mode)
+	if not cache_url or fs.cha(cache_url) or is_on_list("bad_cache", cache_str) then
+		return true
+	end
+
+	add_to_list("preloading", cache_str)
+
+	local target = tostring(cache_url)
+
+	local base_query = generate_preload_query(job, mode, file_type, limit)
+	local query = string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, target)
+	local output = run_query(job, query)
 
 	if not output or (output.stderr and output.stderr ~= "") then
-		-- Log error message
-		if not output then
-			ya.err(
-				string.format(
+		ya.err(
+			output
+					and string.format(
+						"[duckdb] error creating %s cache for %s: %s",
+						mode,
+						tostring(job.file.url),
+						output.stderr
+					)
+				or string.format(
 					"[duckdb] no output returned while creating %s cache for %s",
 					mode,
 					tostring(job.file.url)
 				)
-			)
-		else
-			ya.err(
-				string.format(
-					"[duckdb] error creating %s cache for %s: %s",
+		)
+		remove_file(cache_url)
+		local result = finish_preload(false, cache_str)
+		return result
+	end
+
+	local result = finish_preload(true, cache_str)
+	return result
+end
+
+local function create_cache_excel(job, mode, file_type, limit)
+	local cache_str, cache_url = get_cache_path(job, mode)
+	if not cache_url or fs.cha(cache_url) or is_on_list("bad_cache", cache_str) then
+		return true
+	end
+
+	local output = nil
+
+	if file_type == "csv" then
+		cache_str, cache_url = get_cache_path(job, mode, "csv")
+		local target = tostring(cache_url)
+		local base_query = generate_preload_query(job, mode, "excel_all_varchar") .. " using sample 20%"
+		local query = string.format("COPY (%s) TO '%s' (FORMAT csv);", base_query, target)
+		ya.dbg(query)
+		output = run_query(job, query)
+		ya.dbg("csv stdout: " .. tostring(output.stdout))
+		ya.dbg("csv stderr: " .. tostring(output.stderr))
+	elseif file_type == "workaround" then
+		local _, tmp_csv_url = get_cache_path(job, mode, "csv")
+		local _, std_cache_url = get_cache_path(job, "standard")
+		local _, sum_cache_url = get_cache_path(job, "summarized")
+		local query = {
+			"load excel;",
+			string.format("create table excel as from read_csv('%s', sample_size = -1);", tostring(tmp_csv_url)),
+			"delete from excel;",
+			string.format("copy excel from '%s' (format xlsx);", job.file.url),
+			string.format(
+				"copy (select * from excel limit %s) to '%s' (format parquet);",
+				limit,
+				tostring(std_cache_url)
+			),
+			string.format(
+				"COPY (SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage FROM (SUMMARIZE FROM excel)) to '%s' (FORMAT parquet)",
+				tostring(sum_cache_url)
+			),
+		}
+		output = run_query(job, query, tmp_csv_url, file_type)
+		ya.dbg("final stdout: " .. tostring(output.stdout))
+		ya.dbg("final stderr: " .. tostring(output.stderr))
+		remove_file(tmp_csv_url)
+	else
+		local target = tostring(cache_url)
+		local base_query = generate_preload_query(job, mode, file_type, limit)
+		local query = string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, target)
+		output = run_query(job, query)
+	end
+
+	if not output or (output.stderr and output.stderr ~= "") then
+		ya.err(
+			output
+					and string.format(
+						"[duckdb] error creating %s cache for %s: %s",
+						mode,
+						tostring(job.file.url),
+						output.stderr
+					)
+				or string.format(
+					"[duckdb] no output returned while creating %s cache for %s",
 					mode,
-					tostring(job.file.url),
-					output.stderr
+					tostring(job.file.url)
 				)
-			)
-		end
+		)
 		remove_file(cache_url)
 		return false
 	end
+
 	return true
+end
+
+local function excel_preload(job, file_type)
+	local limit = get_opts("limit")
+
+	-- run standard query
+	local mode = "standard"
+	local std_cache_str, std_cache_url = get_cache_path(job, "standard")
+	local sum_cache_str, sum_cache_url = get_cache_path(job, "summarized")
+	add_to_list("preloading", std_cache_str)
+	add_to_list("preloading", sum_cache_str)
+	local success = create_cache_excel(job, mode, file_type, limit)
+	ya.dbg("standard success: " .. tostring(success) .. " for " .. tostring(job.file.url.name))
+
+	if not success then
+		remove_file(std_cache_url)
+		ya.dbg("Standard failed, trying empty_as_varchar")
+		file_type = "excel_empty_as_varchar"
+		success = create_cache_excel(job, mode, file_type, limit)
+		ya.dbg(file_type .. " success: " .. tostring(success) .. " for " .. tostring(job.file.url.name))
+	end
+
+	if success then
+		ya.dbg("creating summarized using: " .. file_type .. " for " .. tostring(job.file.url.name))
+		mode = "summarized"
+		success = create_cache_excel(job, mode, file_type, limit)
+		ya.dbg(file_type .. " summarized success: " .. tostring(success) .. " for " .. tostring(job.file.url.name))
+		if success then
+			local result = finish_preload(success, std_cache_str, sum_cache_str)
+			return result
+		end
+	end
+
+	ya.dbg("empty_as_varchar failed, using csv workaround for " .. tostring(job.file.url.name))
+	-- run all varchar csv workaround
+	mode = "standard"
+	remove_file(std_cache_url)
+	remove_file(sum_cache_url)
+	file_type = "csv"
+	local csv_cache = create_cache_excel(job, mode, file_type)
+	if not csv_cache then
+		ya.dbg("csv cache failed for " .. tostring(job.file.url.name))
+		local result = finish_preload(success, std_cache_str, sum_cache_str)
+		return result
+	end
+
+	file_type = "workaround"
+	success = create_cache_excel(job, mode, file_type, limit)
+	ya.dbg("csv workaround success " .. tostring(success) .. " for " .. tostring(job.file.url.name))
+	local result = finish_preload(success, std_cache_str, sum_cache_str)
+	return result
 end
 
 -- Preload summarized and standard preview caches
 function M:preload(job)
+	local limit = get_opts("limit")
 	local file_type = check_file_type(job.file.url)
-	if file_type == "duckdb" then
-		return true
-	end
-
 	local all_done = true
 
+	if file_type == "duckdb" then
+		return true
+	elseif file_type == "excel" then
+		return excel_preload(job, file_type)
+	end
+
 	for _, mode in ipairs({ "standard", "summarized" }) do
-		local cache_str, cache_url = get_cache_path(job, mode)
-
-		if cache_url and not fs.cha(cache_url) and not is_on_list("bad_cache", cache_str) then
-			-- Cache doesn't exist, so create it
-			add_to_list("preloading", cache_str)
-
-			local success = create_cache(job, mode, cache_url, file_type)
-
-			remove_from_list("preloading", cache_str)
-			add_to_list("completed", cache_str)
-			if not success then
-				add_to_list("bad_cache", cache_str)
-				all_done = false
-			end
+		local success = create_cache(job, mode, file_type, limit)
+		if not success then
+			all_done = false
 		end
 	end
 
