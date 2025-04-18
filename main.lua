@@ -93,14 +93,10 @@ function M:setup(opts)
 	set_opts("limit", limit)
 end
 
-local function generate_data_source_string(job, file_type)
-	local url_string = "'" .. tostring(job.file.url) .. "'"
+local function generate_data_source_string(target, file_type)
+	local url_string = "'" .. tostring(target) .. "'"
 	if file_type == "excel" then
-		return string.format("read_xlsx(%s)", url_string)
-	elseif file_type == "excel_empty_as_varchar" then
-		return string.format("read_xlsx(%s, empty_as_varchar = true)", url_string)
-	elseif file_type == "excel_all_varchar" then
-		return string.format("read_xlsx(%s, all_varchar = true)", url_string)
+		return string.format("st_read(%s)", url_string)
 	elseif file_type == "text" then
 		return string.format("read_csv(%s)", url_string)
 	else
@@ -109,7 +105,7 @@ local function generate_data_source_string(job, file_type)
 end
 
 local function generate_preload_query(job, mode, file_type, limit)
-	local data_source_string = generate_data_source_string(job, file_type)
+	local data_source_string = generate_data_source_string(job.file.url, file_type)
 	local limit_string = ""
 	if limit then
 		limit_string = "LIMIT " .. tostring(limit)
@@ -252,6 +248,8 @@ local function run_query(job, query, target, file_type)
 	if file_type == "duckdb" then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
+	elseif file_type == "excel" then
+		add_queries_to_table(args, { "install spatial", "load spatial" })
 	end
 
 	-- Duckbox config
@@ -453,7 +451,8 @@ local function generate_peek_query(target, job, limit, offset, file_type, cache_
 		return generate_db_query(limit, offset)
 	end
 
-	local source = "'" .. tostring(target) .. "'"
+	local target_type = is_original_file and file_type or "cache"
+	local source = generate_data_source_string(target, target_type)
 
 	if mode == "standard" then
 		return generate_standard_query(source, job, limit, offset)
@@ -577,7 +576,6 @@ local function prepare_peek_context(job)
 	end
 	set_opts("re_peek", false)
 
-	local file_type = check_file_type(file_url)
 	local cache_str, cache_url = get_cache_path(job, mode)
 	local scrolled_collumns = get_opts("scrolled_columns")
 
@@ -587,6 +585,7 @@ local function prepare_peek_context(job)
 		and not is_on_list("bad_cache", cache_str)
 
 	local target = use_cache and cache_url or file_url
+	local file_type = check_file_type(target)
 	local area = job.area or { h = 25 }
 	local limit = area.h - 7
 	local offset = job.skip
@@ -639,7 +638,9 @@ local function create_cache(job, mode, file_type, limit)
 
 	local base_query = generate_preload_query(job, mode, file_type, limit)
 	local query = string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, target)
-	local output = run_query(job, query)
+	local output = run_query(job, query, nil, file_type)
+	ya.dbg("stdout: " .. tostring(output.stdout))
+	ya.dbg("stderr: " .. tostring(output.stderr))
 
 	if not output or (output.stderr and output.stderr ~= "") then
 		ya.err(
@@ -665,136 +666,43 @@ local function create_cache(job, mode, file_type, limit)
 	return result
 end
 
-local function create_cache_excel(job, mode, file_type, limit)
-	local cache_str, cache_url = get_cache_path(job, mode)
-	if not cache_url or fs.cha(cache_url) or is_on_list("bad_cache", cache_str) then
+local function is_plain_text(job, file_type)
+	local file_hash, _ = get_cache_path(job, "standard", "text")
+	if is_on_list("is_plain_text", file_hash) then
 		return true
 	end
 
-	local output = nil
-
-	if file_type == "csv" then
-		cache_str, cache_url = get_cache_path(job, mode, "csv")
-		local target = tostring(cache_url)
-		local base_query = generate_preload_query(job, mode, "excel_all_varchar") .. " using sample 20%"
-		local query = string.format("COPY (%s) TO '%s' (FORMAT csv);", base_query, target)
-		ya.dbg(query)
-		output = run_query(job, query)
-		ya.dbg("csv stdout: " .. tostring(output.stdout))
-		ya.dbg("csv stderr: " .. tostring(output.stderr))
-	elseif file_type == "workaround" then
-		local _, tmp_csv_url = get_cache_path(job, mode, "csv")
-		local _, std_cache_url = get_cache_path(job, "standard")
-		local _, sum_cache_url = get_cache_path(job, "summarized")
-		local query = {
-			"load excel;",
-			string.format("create table excel as from read_csv('%s', sample_size = -1);", tostring(tmp_csv_url)),
-			"delete from excel;",
-			string.format("copy excel from '%s' (format xlsx);", job.file.url),
-			string.format(
-				"copy (select * from excel limit %s) to '%s' (format parquet);",
-				limit,
-				tostring(std_cache_url)
-			),
-			string.format(
-				"COPY (SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage FROM (SUMMARIZE FROM excel)) to '%s' (FORMAT parquet)",
-				tostring(sum_cache_url)
-			),
-		}
-		output = run_query(job, query, tmp_csv_url, file_type)
-		ya.dbg("final stdout: " .. tostring(output.stdout))
-		ya.dbg("final stderr: " .. tostring(output.stderr))
-		remove_file(tmp_csv_url)
-	else
-		local target = tostring(cache_url)
-		local base_query = generate_preload_query(job, mode, file_type, limit)
-		local query = string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, target)
-		output = run_query(job, query)
-	end
-
-	if not output or (output.stderr and output.stderr ~= "") then
-		ya.err(
-			output
-					and string.format(
-						"[duckdb] error creating %s cache for %s: %s",
-						mode,
-						tostring(job.file.url),
-						output.stderr
-					)
-				or string.format(
-					"[duckdb] no output returned while creating %s cache for %s",
-					mode,
-					tostring(job.file.url)
-				)
-		)
-		remove_file(cache_url)
+	file_type = file_type or check_file_type(job.file.url)
+	if file_type ~= "text" then
 		return false
 	end
 
-	return true
-end
+	local query = {
+		".mode csv",
+		".headers off",
+		string.format("select count(column_name) from (describe from read_csv('%s'));", tostring(job.file.url)),
+	}
+	local output = run_query(job, query, nil, file_type)
+	local result = (output and output.stdout == "1\r\n")
 
-local function excel_preload(job, file_type)
-	local limit = get_opts("limit")
-
-	-- run standard query
-	local mode = "standard"
-	local std_cache_str, std_cache_url = get_cache_path(job, "standard")
-	local sum_cache_str, sum_cache_url = get_cache_path(job, "summarized")
-	add_to_list("preloading", std_cache_str)
-	add_to_list("preloading", sum_cache_str)
-	local success = create_cache_excel(job, mode, file_type, limit)
-	ya.dbg("standard success: " .. tostring(success) .. " for " .. tostring(job.file.url.name))
-
-	if not success then
-		remove_file(std_cache_url)
-		ya.dbg("Standard failed, trying empty_as_varchar")
-		file_type = "excel_empty_as_varchar"
-		success = create_cache_excel(job, mode, file_type, limit)
-		ya.dbg(file_type .. " success: " .. tostring(success) .. " for " .. tostring(job.file.url.name))
+	if result then
+		add_to_list("is_plain_text", file_hash)
 	end
 
-	if success then
-		ya.dbg("creating summarized using: " .. file_type .. " for " .. tostring(job.file.url.name))
-		mode = "summarized"
-		success = create_cache_excel(job, mode, file_type, limit)
-		ya.dbg(file_type .. " summarized success: " .. tostring(success) .. " for " .. tostring(job.file.url.name))
-		if success then
-			local result = finish_preload(success, std_cache_str, sum_cache_str)
-			return result
-		end
-	end
-
-	ya.dbg("empty_as_varchar failed, using csv workaround for " .. tostring(job.file.url.name))
-	-- run all varchar csv workaround
-	mode = "standard"
-	remove_file(std_cache_url)
-	remove_file(sum_cache_url)
-	file_type = "csv"
-	local csv_cache = create_cache_excel(job, mode, file_type)
-	if not csv_cache then
-		ya.dbg("csv cache failed for " .. tostring(job.file.url.name))
-		local result = finish_preload(success, std_cache_str, sum_cache_str)
-		return result
-	end
-
-	file_type = "workaround"
-	success = create_cache_excel(job, mode, file_type, limit)
-	ya.dbg("csv workaround success " .. tostring(success) .. " for " .. tostring(job.file.url.name))
-	local result = finish_preload(success, std_cache_str, sum_cache_str)
 	return result
 end
 
 -- Preload summarized and standard preview caches
 function M:preload(job)
+	if is_plain_text(job, nil) then
+		return true
+	end
 	local limit = get_opts("limit")
 	local file_type = check_file_type(job.file.url)
 	local all_done = true
 
 	if file_type == "duckdb" then
 		return true
-	elseif file_type == "excel" then
-		return excel_preload(job, file_type)
 	end
 
 	for _, mode in ipairs({ "standard", "summarized" }) do
@@ -809,22 +717,29 @@ end
 
 -- Peek with mode toggle if scrolling at top
 function M:peek(job)
-	local peek = prepare_peek_context(job)
-	local query = generate_peek_query(peek.target, job, peek.limit, peek.offset, peek.file_type, peek.cache_str)
-	local output = run_query(job, query, peek.target, peek.file_type)
-	if not output_is_valid(output, peek.mode, job) then
-		if peek.target == peek.cache_url and peek.scrolled_collumns == 0 then
-			add_to_list("bad_cache", peek.cache_str)
-			remove_file(peek.cache_url)
+	local args = prepare_peek_context(job)
+	if is_plain_text(job, args.file_type) then
+		return require("code"):peek(job)
+	end
+
+	local query = generate_peek_query(args.target, job, args.limit, args.offset, args.file_type, args.cache_str)
+	ya.dbg("query: " .. tostring(query))
+	local output = run_query(job, query, args.target, args.file_type)
+	ya.dbg("stdout: " .. tostring(output.stdout))
+	ya.dbg("stderr: " .. tostring(output.stderr))
+	if not output_is_valid(output, args.mode, job) then
+		if args.target == args.cache_url and args.scrolled_collumns == 0 then
+			add_to_list("bad_cache", args.cache_str)
+			remove_file(args.cache_url)
 			return require("duckdb"):peek(job)
-		elseif is_on_list("bad_cache", peek.cache_str) then
+		elseif is_on_list("bad_cache", args.cache_str) then
 			return require("code"):peek(job)
 		end
 	end
 
-	if peek.target == peek.file_url and peek.mode == "summarized" and not peek.use_cache then
+	if args.target == args.file_url and args.mode == "summarized" and not args.use_cache then
 		render_output(output, job)
-		while not is_on_list("completed", peek.cache_str) do
+		while not is_on_list("completed", args.cache_str) do
 			ya.sleep(0.2)
 		end
 		clear_list("completed")
