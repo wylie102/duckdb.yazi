@@ -17,16 +17,18 @@ This plugin previews your data files in yazi using DuckDB, with two available vi
   - Summarized mode: Uses DuckDB's summarize function, enhanced with custom formatting for readability
 - Preview duckdb databases
   - See the tables and the number of rows, columns, indexes in each. Plus a list of column names in index order.
-- Scroll rows using `J` and `K` 
+- Scroll rows using `J` and `K`
 - Scroll columns using your chosen keys ( I use `H` and `L` )
 - Change modes by pressing K when at the top of a file
 
 Supported file types:
 
 - .csv  
+- .tsv
+- .txt - if tabular data
 - .json  
 - .parquet  
-- .tsv
+- .xlsx
 - .duckdb
 - .db - if file is a duckdb database
 
@@ -137,9 +139,11 @@ First you will need Yazi and DuckDB installed.
 Once these are installed you can use the yazi plugin manager to install the plugin.
 
 Use the command:
+
 ```
 ya pack -a wylie102/duckdb
 ```
+
 in your terminal
 
 <br>
@@ -157,6 +161,10 @@ prepend_previewers = [
   { name = "*.tsv", run = "duckdb" },  
   { name = "*.json", run = "duckdb" },  
   { name = "*.parquet", run = "duckdb" },  
+  { name = "*.txt", run = "duckdb" },  
+  { name = "*.xlsx", run = "duckdb" },  
+  { name = "*.db", run = "duckdb" },
+  { name = "*.duckdb", run = "duckdb" }
 ]
 
 prepend_preloaders = [  
@@ -164,14 +172,21 @@ prepend_preloaders = [
   { name = "*.tsv", run = "duckdb", multi = false },  
   { name = "*.json", run = "duckdb", multi = false },  
   { name = "*.parquet", run = "duckdb", multi = false },
-  { name = "*.db", run = "duckdb" },
-  { name = "*.duckdb", run = "duckdb" },
+  { name = "*.txt", run = "duckdb", multi = false },  
+  { name = "*.xlsx", run = "duckdb", multi = false }
 ]
 ```
+
+>note on .txt: I have tried to exclede files that do contain only raw text (basically if duckdb reads only one column) however, if you don't ever work with .txt files which are actually tabular data (basically misnamed csv or tsv files) then you can just not include the .txt lines.
+
+<br>
+
+>note on .xlsx: This can be temperamental, especially around inferring types. This is due to the way that duckdb handles excel files. Hopefully they will soon implement some of the smart type detection from the csv reader in the excel extension and it will improve.
 
 <br>
 
 ### init.lua
+
 Then create an `init.lua` file in the same folder and add
 
 ```lua
@@ -184,6 +199,7 @@ This is where the configuration/settings can go ([see below](https://github.com/
 <br>
 
 ### keymap.toml
+
 Then in your [keymap.toml](https://yazi-rs.github.io/docs/configuration/keymap) file add:
 
 ```toml
