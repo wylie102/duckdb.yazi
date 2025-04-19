@@ -41,6 +41,18 @@ local function clear_list(category)
 	set_opts(category, {}) -- replaces the whole list with an empty table
 end
 
+local function add_queries_to_table(target_table, queries)
+	if type(queries) == "table" then
+		for _, item in ipairs(queries) do
+			table.insert(target_table, "-c")
+			table.insert(target_table, item)
+		end
+	else
+		table.insert(target_table, "-c")
+		table.insert(target_table, queries)
+	end
+end
+
 function M:entry(job)
 	local scroll_delta = tonumber(job.args and job.args[1])
 
@@ -68,6 +80,7 @@ function M:setup(opts)
 		row_id = false
 	end
 	local column_fit_factor = opts.column_fit_factor or 10
+	local limit = opts.cache_size or 500
 
 	set_opts("mode", mode)
 	set_opts("mode_changed", false)
@@ -77,15 +90,32 @@ function M:setup(opts)
 	set_opts("row_id", row_id)
 	set_opts("scrolled_columns", 0)
 	set_opts("column_fit_factor", column_fit_factor)
+	set_opts("limit", limit)
 end
 
-local function generate_preload_query(job, mode)
+local function generate_data_source_string(target, file_type)
+	local url_string = "'" .. tostring(target) .. "'"
+	if file_type == "excel" then
+		return string.format("st_read(%s)", url_string)
+	elseif file_type == "text" then
+		return string.format("read_csv(%s)", url_string)
+	else
+		return url_string
+	end
+end
+
+local function generate_preload_query(job, mode, file_type, limit)
+	local data_source_string = generate_data_source_string(job.file.url, file_type)
+	local limit_string = ""
+	if limit then
+		limit_string = "LIMIT " .. tostring(limit)
+	end
 	if mode == "standard" then
-		return string.format("FROM '%s' LIMIT 500", tostring(job.file.url))
+		return "FROM " .. data_source_string .. limit_string
 	else
 		return string.format(
-			"SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage FROM (SUMMARIZE FROM '%s')",
-			tostring(job.file.url)
+			"SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage FROM (SUMMARIZE FROM %s)",
+			data_source_string
 		)
 	end
 end
@@ -158,24 +188,6 @@ FROM %s
 	)
 end
 
--- Get preview cache path
-local function get_cache_path(job, mode)
-	local cache_version = 3
-	local skip = job.skip
-	job.skip = 1000000 + cache_version
-	local base = ya.file_cache(job)
-	job.skip = skip
-
-	if not base then
-		return nil, nil
-	end
-
-	local base_str = tostring(base) .. "_" .. mode .. ".parquet"
-	local path_url = Url(base_str)
-	local path_str = tostring(path_url.name)
-	return path_str, path_url
-end
-
 local extension_map = {
 	csv = "csv",
 	tsv = "csv",
@@ -186,6 +198,28 @@ local extension_map = {
 	duckdb = "duckdb",
 	db = "duckdb",
 }
+
+-- Get preview cache path
+local function get_cache_path(job, mode, extension)
+	local suffix = "_" .. mode .. ".parquet"
+	if extension then
+		suffix = "_" .. extension .. "." .. extension
+	end
+	local cache_version = 3
+	local skip = job.skip
+	job.skip = 1000000 + cache_version
+	local base = ya.file_cache(job)
+	job.skip = skip
+
+	if not base then
+		return nil, nil
+	end
+
+	local base_str = tostring(base) .. suffix
+	local path_url = Url(base_str)
+	local path_str = tostring(path_url.name)
+	return path_str, path_url
+end
 
 local function get_extension(filename)
 	-- Match the last "dot + word characters" at the end of the string
@@ -214,31 +248,22 @@ local function run_query(job, query, target, file_type)
 	if file_type == "duckdb" then
 		table.insert(args, "-readonly")
 		table.insert(args, tostring(target))
+	elseif file_type == "excel" then
+		add_queries_to_table(args, { "install spatial", "load spatial" })
 	end
 
 	-- Duckbox config
-	table.insert(args, "-c")
-	table.insert(args, ".mode duckbox")
-	table.insert(args, "-c")
-	table.insert(args, ".timer off")
-	table.insert(args, "-c")
-	table.insert(args, "SET enable_progress_bar = false;")
-	table.insert(args, "-c")
-	table.insert(args, string.format(".maxwidth %d", width))
-	table.insert(args, "-c")
-	table.insert(args, string.format(".maxrows %d", height))
-	table.insert(args, "-c")
-	table.insert(args, ".highlight_results on")
+	add_queries_to_table(args, {
+		".mode duckbox",
+		".timer off",
+		"SET enable_progress_bar = false;",
+		string.format(".maxwidth %d", width),
+		string.format(".maxrows %d", height),
+		".highlight_results on",
+	})
 
-	-- Add query (string or list of -c args)
-	if type(query) == "table" then
-		for _, item in ipairs(query) do
-			table.insert(args, item)
-		end
-	else
-		table.insert(args, "-c")
-		table.insert(args, query)
-	end
+	-- Add query or list of queries
+	add_queries_to_table(args, query)
 
 	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 	if not child then
@@ -335,7 +360,6 @@ end
 
 local function generate_standard_query(target, job, limit, offset)
 	local scroll = get_opts("scrolled_columns") or 0
-	local args = {}
 	local actual_width = math.max((job.area and job.area.w or 80), 80)
 	local column_fit_factor = get_opts("column_fit_factor") or 7
 	local fetched_columns = math.floor(actual_width / column_fit_factor) + scroll
@@ -372,12 +396,7 @@ set variable included_columns = (
 		limit,
 		offset
 	)
-
-	table.insert(args, "-c")
-	table.insert(args, excluded_column_cte)
-	table.insert(args, "-c")
-	table.insert(args, filtered_select)
-	return args
+	return { excluded_column_cte, filtered_select }
 end
 
 local function generate_summarized_query(source, limit, offset)
@@ -432,7 +451,8 @@ local function generate_peek_query(target, job, limit, offset, file_type, cache_
 		return generate_db_query(limit, offset)
 	end
 
-	local source = "'" .. tostring(target) .. "'"
+	local target_type = is_original_file and file_type or "cache"
+	local source = generate_data_source_string(target, target_type)
 
 	if mode == "standard" then
 		return generate_standard_query(source, job, limit, offset)
@@ -556,7 +576,6 @@ local function prepare_peek_context(job)
 	end
 	set_opts("re_peek", false)
 
-	local file_type = check_file_type(file_url)
 	local cache_str, cache_url = get_cache_path(job, mode)
 	local scrolled_collumns = get_opts("scrolled_columns")
 
@@ -566,6 +585,7 @@ local function prepare_peek_context(job)
 		and not is_on_list("bad_cache", cache_str)
 
 	local target = use_cache and cache_url or file_url
+	local file_type = check_file_type(target)
 	local area = job.area or { h = 25 }
 	local limit = area.h - 7
 	local offset = job.skip
@@ -595,65 +615,100 @@ local function remove_file(cache_url)
 	end
 end
 
-local function create_cache(job, mode, cache_url, file_type)
-	local base_query = generate_preload_query(job, mode)
-	local output = run_query(
-		job,
-		string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, tostring(cache_url)),
-		job.file.url,
-		file_type
-	)
+local function finish_preload(success, cache_str1, cache_str2)
+	for _, cache_str in ipairs({ cache_str1, cache_str2 }) do
+		if not success then
+			add_to_list("bad_cache", cache_str)
+		end
+		remove_from_list("preloading", cache_str)
+		add_to_list("completed", cache_str)
+	end
+	return success
+end
+
+local function create_cache(job, mode, file_type, limit)
+	local cache_str, cache_url = get_cache_path(job, mode)
+	if not cache_url or fs.cha(cache_url) or is_on_list("bad_cache", cache_str) then
+		return true
+	end
+
+	add_to_list("preloading", cache_str)
+
+	local target = tostring(cache_url)
+
+	local base_query = generate_preload_query(job, mode, file_type, limit)
+	local query = string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, target)
+	local output = run_query(job, query, nil, file_type)
+	ya.dbg("stdout: " .. tostring(output.stdout))
+	ya.dbg("stderr: " .. tostring(output.stderr))
 
 	if not output or (output.stderr and output.stderr ~= "") then
-		-- Log error message
-		if not output then
-			ya.err(
-				string.format(
+		ya.err(
+			output
+					and string.format(
+						"[duckdb] error creating %s cache for %s: %s",
+						mode,
+						tostring(job.file.url),
+						output.stderr
+					)
+				or string.format(
 					"[duckdb] no output returned while creating %s cache for %s",
 					mode,
 					tostring(job.file.url)
 				)
-			)
-		else
-			ya.err(
-				string.format(
-					"[duckdb] error creating %s cache for %s: %s",
-					mode,
-					tostring(job.file.url),
-					output.stderr
-				)
-			)
-		end
+		)
 		remove_file(cache_url)
+		local result = finish_preload(false, cache_str)
+		return result
+	end
+
+	local result = finish_preload(true, cache_str)
+	return result
+end
+
+local function is_plain_text(job, file_type)
+	local file_hash, _ = get_cache_path(job, "standard", "text")
+	if is_on_list("is_plain_text", file_hash) then
+		return true
+	end
+
+	file_type = file_type or check_file_type(job.file.url)
+	if file_type ~= "text" then
 		return false
 	end
-	return true
+
+	local query = {
+		".mode csv",
+		".headers off",
+		string.format("select count(column_name) from (describe from read_csv('%s'));", tostring(job.file.url)),
+	}
+	local output = run_query(job, query, nil, file_type)
+	local result = (output and output.stdout == "1\r\n")
+
+	if result then
+		add_to_list("is_plain_text", file_hash)
+	end
+
+	return result
 end
 
 -- Preload summarized and standard preview caches
 function M:preload(job)
+	if is_plain_text(job, nil) then
+		return true
+	end
+	local limit = get_opts("limit")
 	local file_type = check_file_type(job.file.url)
+	local all_done = true
+
 	if file_type == "duckdb" then
 		return true
 	end
 
-	local all_done = true
-
 	for _, mode in ipairs({ "standard", "summarized" }) do
-		local cache_str, cache_url = get_cache_path(job, mode)
-
-		if cache_url and not fs.cha(cache_url) and not is_on_list("bad_cache", cache_str) then
-			-- Cache doesn't exist, so create it
-			add_to_list("preloading", cache_str)
-
-			local success = create_cache(job, mode, cache_url, file_type)
-
-			remove_from_list("preloading", cache_str)
-			add_to_list("completed", cache_str)
-			if not success then
-				add_to_list("bad_cache", cache_str)
-				all_done = false
-			end
+		local success = create_cache(job, mode, file_type, limit)
+		if not success then
+			all_done = false
 		end
 	end
 
@@ -662,22 +717,29 @@ end
 
 -- Peek with mode toggle if scrolling at top
 function M:peek(job)
-	local peek = prepare_peek_context(job)
-	local query = generate_peek_query(peek.target, job, peek.limit, peek.offset, peek.file_type, peek.cache_str)
-	local output = run_query(job, query, peek.target, peek.file_type)
-	if not output_is_valid(output, peek.mode, job) then
-		if peek.target == peek.cache_url and peek.scrolled_collumns == 0 then
-			add_to_list("bad_cache", peek.cache_str)
-			remove_file(peek.cache_url)
+	local args = prepare_peek_context(job)
+	if is_plain_text(job, args.file_type) then
+		return require("code"):peek(job)
+	end
+
+	local query = generate_peek_query(args.target, job, args.limit, args.offset, args.file_type, args.cache_str)
+	ya.dbg("query: " .. tostring(query))
+	local output = run_query(job, query, args.target, args.file_type)
+	ya.dbg("stdout: " .. tostring(output.stdout))
+	ya.dbg("stderr: " .. tostring(output.stderr))
+	if not output_is_valid(output, args.mode, job) then
+		if args.target == args.cache_url and args.scrolled_collumns == 0 then
+			add_to_list("bad_cache", args.cache_str)
+			remove_file(args.cache_url)
 			return require("duckdb"):peek(job)
-		elseif is_on_list("bad_cache", peek.cache_str) then
+		elseif is_on_list("bad_cache", args.cache_str) then
 			return require("code"):peek(job)
 		end
 	end
 
-	if peek.target == peek.file_url and peek.mode == "summarized" and not peek.use_cache then
+	if args.target == args.file_url and args.mode == "summarized" and not args.use_cache then
 		render_output(output, job)
-		while not is_on_list("completed", peek.cache_str) do
+		while not is_on_list("completed", args.cache_str) do
 			ya.sleep(0.2)
 		end
 		clear_list("completed")
