@@ -105,7 +105,6 @@ Supported file types:
 
 <br><br>
 
-
 ### Preview mode is now toggleable
 
 - Preview mode can be toggled within yazi
@@ -322,4 +321,5 @@ More information [here](https://duckdb.org/docs/stable/clients/cli/dot_commands#
 
 ### A Note on the Latest update
 
-Added logic for reading `.xlsx` and `.txt` files, you can just add these to your yazi.toml file to be able to view them
+Added logic for reading `.xlsx` and `.txt` files, you can just add these to your yazi.toml file to be able to view them.
+Also added the ability to set the cache row size in the yazi.toml file.
