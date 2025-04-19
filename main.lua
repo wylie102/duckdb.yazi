@@ -53,8 +53,32 @@ local function add_queries_to_table(target_table, queries)
 	end
 end
 
+local function duckdb_opener(job)
+	permit = ya.hide()
+	local output, err = Command("duckdb"):arg(tostring(job.file.url)):stderr(Command.PIPED):output()
+	if err ~= nil then
+		ya.notify({
+			title = "Failed to run lazygit command",
+			content = "Status: " .. err_code,
+			level = "error",
+			timeout = 5,
+		})
+	elseif not output.status.success then
+		ya.notify({
+			title = "lazygit in" .. cwd .. "failed, exit code " .. output.status.code,
+			content = output.stderr,
+			level = "error",
+			timeout = 5,
+		})
+	end
+end
+
 function M:entry(job)
-	local scroll_delta = tonumber(job.args and job.args[1])
+	local arg = job.args and job.args[1]
+	if arg ~= "+1" or "-1" then
+		duckdb_opener(job)
+	end
+	local scroll_delta = tonumber(arg)
 
 	if not scroll_delta then
 		ya.err("DuckDB column scroll entry: Invalid or missing scroll delta; exiting.")
