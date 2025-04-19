@@ -34,9 +34,9 @@ Supported file types:
 
 <br><br>
 
-## New Features
+## Features
 
-### Horizontal Scrolling
+### Column Scrolling
 
 <br>
 
@@ -55,10 +55,6 @@ Supported file types:
 
 >**Cache changes - update 04/04/25** - If you want info on the latest (cache related changes) then see [here](https://github.com/wylie102/duckdb.yazi?tab=readme-ov-file#setup-and-usage-changes-from-previous-versions). Otherwise keep reading new features and config options below.
 <br>
-
-## Features
-
-First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and maintaining yazi, and for helping me fix a particularly annoying bug in the last release.
 
 <br>
 
@@ -109,14 +105,12 @@ First of all thank you to [sxyazi](https://github.com/sxyazi) for creating and m
 
 <br><br>
 
-## Aditions in Previous Update
 
-### Default preview mode is now toggleable
+### Preview mode is now toggleable
 
 - Preview mode can be toggled within yazi
 - Press "K" at the top of the file to toggle between "standard" and "summarized."
-- Preview mode is remembered on a per session basis, rather than per file.
-- Is customisable in the `init.lua` see Configuration section.
+- The mode enabled at startup is customisable in the `init.lua` see Configuration section.
 
 ### Performance improvements through caching
 
@@ -177,11 +171,11 @@ prepend_preloaders = [
 ]
 ```
 
->note on .txt: I have tried to exclede files that do contain only raw text (basically if duckdb reads only one column) however, if you don't ever work with .txt files which are actually tabular data (basically misnamed csv or tsv files) then you can just not include the .txt lines.
+>note on .txt: I have tried to exclude files that contain only raw text (if duckdb reads only one column). However, if you don't ever work with .txt files which contain tabular data (basically misnamed csv or tsv files) then you can just not include the .txt lines in your setup.
 
 <br>
 
->note on .xlsx: This can be temperamental, especially around inferring types. This is due to the way that duckdb handles excel files. Hopefully they will soon implement some of the smart type detection from the csv reader in the excel extension and it will improve.
+>note on .xlsx: This can be temperamental, especially around inferring types. This is due to the way that duckdb handles excel files. This feature currently uses st_read from the spatial extension since it gives the most consistent type results. Hopefully they will soon implement some of the smart type detection from the csv reader in their excel extension and then we can use that instead.
 
 <br>
 
@@ -253,6 +247,7 @@ Add the following:
     -- DuckDB plugin configuration
 require("duckdb"):setup({
   mode = "standard"/"summarized",            -- Default: "summarized"
+  cache_size = 1000                          -- Default: 500
   row_id = true/false/"dynamic",             -- Default: false
   minmax_column_width = int                  -- Default: 21
   column_fit_factor = float                  -- Default: 10.0
@@ -268,6 +263,8 @@ But the setup call `require("duckdb"):setup()` is still required for the plugin 
 ### Explaination of settings
 
 - mode - the view that will be the default on startup. The default is summarized, but this can sometimes be slow if running while the files are also being cached. Most of the time it will be the same speed as standard, so pick the one you like.
+
+- cache_size - the number of rows cached in the standard mode. Make the number higher if you want to be able to scroll further down in your files. Be aware this could impact cache size and cache performance if it was made too large. If you change this setting you will need to run `yazi --clear-cache` for it to take effect.
 
 - row_id - displays a row column when viewing in standard mode. If set to dynamic it will only turn on when scrolling columns and will always be the left most column.
 
@@ -325,15 +322,4 @@ More information [here](https://duckdb.org/docs/stable/clients/cli/dot_commands#
 
 ### A Note on the Latest update
 
-The caches are now stored as parquet files, previously they were mini duckdb databases because the duckdb documentation suggested better performance with similar file size to parquet. However, there seemt to be a minimum file size of ~500kb regardless of the amount of data stored. While that isn't huge, it could add up.
-
-So I did some tests and using parquet files we get file sizes of ~5kb for the summarized view and usually 70-130kb for standard view. So about 1/10th the size for both views. Load speeds were similar (or slightly faster) using parquet, for both caching and viewing operations.
-
-So we've moved to parquet. I have cache versioning implemented, so yazi will automatically switch to using the latest version. But won't delete the old cache files. These are temp files and will usually be deleted on reboot, but if you like you can clear the whole cache using `yazi --clear-cache`.
-
-### Original version
-
-Previously, preview mode was selected by setting an environment variable (`DUCKDB_PREVIEW_MODE`).
-
-The new version no longer uses environment variables. Toggle preview modes directly within yazi using the keybinding described in the New Features section.
-The default preview mode value can be set by creating an init.lua file in your config/yazi directory. See configuration above.
+Added logic for reading `.xlsx` and `.txt` files, you can just add these to your yazi.toml file to be able to view them
