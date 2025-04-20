@@ -53,17 +53,72 @@ local function add_queries_to_table(target_table, queries)
 	end
 end
 
-local get_hovered_url = ya.sync(function()
+local function generate_data_source_string(target, file_type)
+	local url_string = "'" .. tostring(target) .. "'"
+	if file_type == "excel" then
+		return string.format("st_read(%s)", url_string)
+	elseif file_type == "text" then
+		return string.format("read_csv(%s)", url_string)
+	else
+		return url_string
+	end
+end
+
+local extension_map = {
+	csv = "csv",
+	tsv = "csv",
+	txt = "text",
+	json = "json",
+	parquet = "parquet",
+	xlsx = "excel",
+	duckdb = "duckdb",
+	db = "duckdb",
+}
+
+local function get_extension(filename)
+	-- Match the last "dot + word characters" at the end of the string
+	return filename:match("^.+%.([a-zA-Z0-9]+)$")
+end
+
+local function check_file_type(path)
+	local name = path.name or ""
+	local ext = get_extension(name)
+	if ext then
+		local filetype = extension_map[ext:lower()]
+		if filetype then
+			return filetype
+		end
+	end
+	ya.err("File is not a supported file type")
+end
+
+local get_hovered_url_string = ya.sync(function()
 	return tostring(cx.active.current.hovered.url)
 end)
 
 local duckdb_opener = ya.sync(function(_, arg)
-	local hovered_url = get_hovered_url()
-	if arg == "-open" then
-		ya.manager_emit("shell", { "duckdb " .. hovered_url, block = true, orphan = true, confirm = true })
-	elseif arg == "-ui" then
-		ya.manager_emit("shell", { "duckdb -ui " .. hovered_url, block = true, orphan = true, confirm = true })
+	local hovered_url = Url(get_hovered_url_string())
+	local file_type = check_file_type(hovered_url)
+	local command = "duckdb "
+	if file_type == "excel" then
+		command = string.format([[%s-cmd "install spatial;" -cmd "load spatial;" ]], command)
+		ya.dbg("command: " .. tostring(command))
 	end
+
+	if file_type ~= "duckdb" then
+		local table_name = hovered_url.stem
+		local data_source_string = generate_data_source_string(hovered_url, file_type)
+		local query = string.format("CREATE TABLE %s AS FROM %s;", table_name, data_source_string)
+		command = string.format('%s-cmd "%s"', command, query)
+		ya.dbg("command final: " .. tostring(command))
+	else
+		command = command .. tostring(hovered_url)
+	end
+
+	if arg ~= "-open" then
+		command = string.format("%s -ui", command)
+	end
+	ya.manager_emit("shell", { command, block = true, orphan = true, confirm = true })
 end)
 
 function M:entry(job)
@@ -108,17 +163,6 @@ function M:setup(opts)
 	set_opts("scrolled_columns", 0)
 	set_opts("column_fit_factor", column_fit_factor)
 	set_opts("limit", limit)
-end
-
-local function generate_data_source_string(target, file_type)
-	local url_string = "'" .. tostring(target) .. "'"
-	if file_type == "excel" then
-		return string.format("st_read(%s)", url_string)
-	elseif file_type == "text" then
-		return string.format("read_csv(%s)", url_string)
-	else
-		return url_string
-	end
 end
 
 local function generate_preload_query(job, mode, file_type, limit)
@@ -205,17 +249,6 @@ FROM %s
 	)
 end
 
-local extension_map = {
-	csv = "csv",
-	tsv = "csv",
-	txt = "text",
-	json = "json",
-	parquet = "parquet",
-	xlsx = "excel",
-	duckdb = "duckdb",
-	db = "duckdb",
-}
-
 -- Get preview cache path
 local function get_cache_path(job, mode, extension)
 	local suffix = "_" .. mode .. ".parquet"
@@ -236,23 +269,6 @@ local function get_cache_path(job, mode, extension)
 	local path_url = Url(base_str)
 	local path_str = tostring(path_url.name)
 	return path_str, path_url
-end
-
-local function get_extension(filename)
-	-- Match the last "dot + word characters" at the end of the string
-	return filename:match("^.+%.([a-zA-Z0-9]+)$")
-end
-
-local function check_file_type(path)
-	local name = path.name or ""
-	local ext = get_extension(name)
-	if ext then
-		local filetype = extension_map[ext:lower()]
-		if filetype then
-			return filetype
-		end
-	end
-	ya.err("File is not a supported file type")
 end
 
 -- Run queries.
