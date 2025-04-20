@@ -53,30 +53,23 @@ local function add_queries_to_table(target_table, queries)
 	end
 end
 
-local function duckdb_opener(job)
-	permit = ya.hide()
-	local output, err = Command("duckdb"):arg(tostring(job.file.url)):stderr(Command.PIPED):output()
-	if err ~= nil then
-		ya.notify({
-			title = "Failed to run lazygit command",
-			content = "Status: " .. err_code,
-			level = "error",
-			timeout = 5,
-		})
-	elseif not output.status.success then
-		ya.notify({
-			title = "lazygit in" .. cwd .. "failed, exit code " .. output.status.code,
-			content = output.stderr,
-			level = "error",
-			timeout = 5,
-		})
+local get_hovered_url = ya.sync(function()
+	return tostring(cx.active.current.hovered.url)
+end)
+
+local duckdb_opener = ya.sync(function(_, arg)
+	local hovered_url = get_hovered_url()
+	if arg == "-open" then
+		ya.manager_emit("shell", { "duckdb " .. hovered_url, block = true, orphan = true, confirm = true })
+	elseif arg == "-ui" then
+		ya.manager_emit("shell", { "duckdb -ui " .. hovered_url, block = true, orphan = true, confirm = true })
 	end
-end
+end)
 
 function M:entry(job)
 	local arg = job.args and job.args[1]
-	if arg ~= "+1" or "-1" then
-		duckdb_opener(job)
+	if arg ~= "+1" and arg ~= "-1" then
+		return duckdb_opener(arg)
 	end
 	local scroll_delta = tonumber(arg)
 
@@ -396,7 +389,7 @@ local function generate_standard_query(target, job, limit, offset)
 		row_id_prefix = "row_number() over () as row, "
 	end
 
-	local excluded_column_cte = string.format(
+	local included_columns_cte = string.format(
 		[[
 set variable included_columns = (
 	with column_list as (
@@ -420,7 +413,7 @@ set variable included_columns = (
 		limit,
 		offset
 	)
-	return { excluded_column_cte, filtered_select }
+	return { included_columns_cte, filtered_select }
 end
 
 local function generate_summarized_query(source, limit, offset)
