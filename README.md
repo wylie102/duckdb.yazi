@@ -205,6 +205,17 @@ desc = "Scroll one column to the left"
 on = "L"
 run = "plugin duckdb +1"
 desc = "Scroll one column to the right"
+
+[[manager.prepend_keymap]]
+on = ["g", "o"]
+run = "plugin duckdb -open"
+desc = "open with duckdb"
+
+[[manager.prepend_keymap]]
+on = ["g", "u"]
+run = "plugin duckdb -ui"
+desc = "open with duckdb ui"
+
 ```
 
 >I use `H` and `L` because it makes logical sense to me.
