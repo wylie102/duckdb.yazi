@@ -106,7 +106,7 @@ local duckdb_opener = ya.sync(function(_, arg)
 	end
 
 	if file_type ~= "duckdb" then
-		local table_name = hovered_url.stem
+		local table_name = '\\"' .. hovered_url.stem .. '\\"'
 		local data_source_string = generate_data_source_string(hovered_url, file_type)
 		local query = string.format("CREATE TABLE %s AS FROM %s;", table_name, data_source_string)
 		command = string.format('%s-cmd "%s"', command, query)
