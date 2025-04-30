@@ -54,14 +54,25 @@ local function add_queries_to_table(target_table, queries)
 end
 
 local function generate_data_source_string(target, file_type)
-	local url_string = "'" .. tostring(target) .. "'"
+	local url = tostring(target)
+	local url_str = "'" .. url .. "'"
+
+	-- Excel files
 	if file_type == "excel" then
-		return string.format("st_read(%s)", url_string)
-	elseif file_type == "text" then
-		return string.format("read_csv(%s)", url_string)
-	else
-		return url_string
+		return string.format("st_read(%s)", url_str)
 	end
+
+	-- CSV and plain-text both use the same retry logic
+	if file_type == "csv" or file_type == "text" then
+		if is_on_list("retry", url) then
+			return string.format("read_csv(%s, sample_size = -1)", url_str)
+		else
+			return string.format("read_csv(%s)", url_str)
+		end
+	end
+
+	-- All other types (json, parquet, etc.)
+	return url_str
 end
 
 local extension_map = {
@@ -166,17 +177,15 @@ function M:setup(opts)
 end
 
 local function generate_preload_query(job, mode, file_type, limit)
-	local data_source_string = generate_data_source_string(job.file.url, file_type)
-	local limit_string = ""
-	if limit then
-		limit_string = "LIMIT " .. tostring(limit)
-	end
+	local ds = generate_data_source_string(job.file.url, file_type)
+	local lim = limit and ("LIMIT " .. tostring(limit)) or ""
 	if mode == "standard" then
-		return "FROM " .. data_source_string .. limit_string
+		return "FROM " .. ds .. " " .. lim
 	else
 		return string.format(
-			"SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage FROM (SUMMARIZE FROM %s)",
-			data_source_string
+			"SELECT * EXCLUDE(null_percentage), CAST(null_percentage AS DOUBLE) AS null_percentage "
+				.. "FROM (SUMMARIZE FROM %s)",
+			ds
 		)
 	end
 end
@@ -666,37 +675,36 @@ local function create_cache(job, mode, file_type, limit)
 	end
 
 	add_to_list("preloading", cache_str)
-
 	local target = tostring(cache_url)
+	local url = tostring(job.file.url)
+	local attempt = 1
 
-	local base_query = generate_preload_query(job, mode, file_type, limit)
-	local query = string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, target)
-	local output = run_query(job, query, nil, file_type)
-	ya.dbg("stdout: " .. tostring(output.stdout))
-	ya.dbg("stderr: " .. tostring(output.stderr))
+	while true do
+		local base_query = generate_preload_query(job, mode, file_type, limit)
+		local query = string.format("COPY (%s) TO '%s' (FORMAT 'parquet');", base_query, target)
 
-	if not output or (output.stderr and output.stderr ~= "") then
-		ya.err(
-			output
-					and string.format(
-						"[duckdb] error creating %s cache for %s: %s",
-						mode,
-						tostring(job.file.url),
-						output.stderr
-					)
-				or string.format(
-					"[duckdb] no output returned while creating %s cache for %s",
-					mode,
-					tostring(job.file.url)
-				)
-		)
+		local output = run_query(job, query, nil, file_type)
+		ya.dbg(("stdout [try %d]: %s"):format(attempt, tostring(output.stdout)))
+		ya.dbg(("stderr [try %d]: %s"):format(attempt, tostring(output.stderr)))
+
+		if output and (not output.stderr or output.stderr == "") then
+			return finish_preload(true, cache_str)
+		end
+
 		remove_file(cache_url)
-		local result = finish_preload(false, cache_str)
-		return result
-	end
 
-	local result = finish_preload(true, cache_str)
-	return result
+		if file_type == "csv" and attempt == 1 then
+			ya.dbg("First CSV attempt failed for " .. url .. "; retrying full sample")
+			add_to_list("retry", url)
+			attempt = attempt + 1
+		else
+			ya.err(
+				output and string.format("[duckdb] error creating %s cache for %s: %s", mode, url, output.stderr)
+					or string.format("[duckdb] no output returned while creating %s cache for %s", mode, url)
+			)
+			return finish_preload(false, cache_str)
+		end
+	end
 end
 
 local function is_plain_text(job, file_type)
