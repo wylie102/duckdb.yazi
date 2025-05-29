@@ -118,7 +118,7 @@ local duckdb_opener = ya.sync(function(_, arg)
 	if arg ~= "-open" then
 		command = string.format("%s -ui", command)
 	end
-	ya.manager_emit("shell", { command, block = true, orphan = true, confirm = true })
+	ya.emit("shell", { command, block = true, orphan = true, confirm = true })
 end)
 
 function M:entry(job)
@@ -137,7 +137,7 @@ function M:entry(job)
 	scrolled_columns = math.max(0, scrolled_columns + scroll_delta)
 	set_opts("scrolled_columns", scrolled_columns)
 
-	ya.manager_emit("seek", { "lateral scroll" })
+	ya.emit("seek", { "lateral scroll" })
 end
 
 -- Setup from init.lua: require("duckdb"):setup({ mode = "standard"/"summarized" })
@@ -298,7 +298,7 @@ local function run_query(job, query, target, file_type)
 	-- Add query or list of queries
 	add_queries_to_table(args, query)
 
-	local child = Command("duckdb"):args(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
+	local child = Command("duckdb"):arg(args):stdout(Command.PIPED):stderr(Command.PIPED):spawn()
 	if not child then
 		ya.err("Failed to spawn DuckDB")
 		return nil
@@ -568,7 +568,7 @@ end
 
 local function render_output(output, job)
 	local cleaned = output.stdout and output.stdout:gsub("\r", "") or "[no output]"
-	ya.preview_widgets(job, {
+	ya.preview_widget(job, {
 		ui.Text.parse(cleaned):area(job.area),
 	})
 end
@@ -797,9 +797,9 @@ function M:seek(job)
 		set_opts("mode", new_mode)
 		set_opts("mode_changed", true)
 		-- Trigger re-peek
-		ya.manager_emit("peek", { OFFSET_BASE, only_if = job.file.url })
+		ya.emit("peek", { OFFSET_BASE, only_if = job.file.url })
 	else
-		ya.manager_emit("peek", { new_skip + OFFSET_BASE, only_if = job.file.url })
+		ya.emit("peek", { new_skip + OFFSET_BASE, only_if = job.file.url })
 	end
 end
 
